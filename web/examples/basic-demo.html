@@ -1,0 +1,739 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SpleeterJS - Basic Demo</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 20px;
+        background-color: #f5f5f5;
+      }
+
+      .container {
+        background: white;
+        padding: 30px;
+        border-radius: 10px;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+      }
+
+      h1 {
+        color: #333;
+        text-align: center;
+        margin-bottom: 30px;
+      }
+
+      .section {
+        margin-bottom: 30px;
+        padding: 20px;
+        border: 1px solid #ddd;
+        border-radius: 5px;
+      }
+
+      .section h2 {
+        color: #555;
+        margin-top: 0;
+      }
+
+      .file-input {
+        margin-bottom: 15px;
+      }
+
+      .file-input input[type="file"] {
+        padding: 10px;
+        border: 2px dashed #ccc;
+        border-radius: 5px;
+        width: 100%;
+        box-sizing: border-box;
+      }
+
+      .controls {
+        display: flex;
+        gap: 10px;
+        margin-bottom: 20px;
+        flex-wrap: wrap;
+      }
+
+      button {
+        padding: 10px 20px;
+        border: none;
+        border-radius: 5px;
+        cursor: pointer;
+        font-size: 14px;
+        transition: background-color 0.3s;
+      }
+
+      .btn-primary {
+        background-color: #007bff;
+        color: white;
+      }
+
+      .btn-primary:hover {
+        background-color: #0056b3;
+      }
+
+      .btn-secondary {
+        background-color: #6c757d;
+        color: white;
+      }
+
+      .btn-secondary:hover {
+        background-color: #545b62;
+      }
+
+      .btn-danger {
+        background-color: #dc3545;
+        color: white;
+      }
+
+      .btn-danger:hover {
+        background-color: #c82333;
+      }
+
+      button:disabled {
+        background-color: #ccc;
+        cursor: not-allowed;
+      }
+
+      .status {
+        padding: 10px;
+        border-radius: 5px;
+        margin-bottom: 15px;
+      }
+
+      .status.info {
+        background-color: #d1ecf1;
+        color: #0c5460;
+        border: 1px solid #bee5eb;
+      }
+
+      .status.success {
+        background-color: #d4edda;
+        color: #155724;
+        border: 1px solid #c3e6cb;
+      }
+
+      .status.error {
+        background-color: #f8d7da;
+        color: #721c24;
+        border: 1px solid #f5c6cb;
+      }
+
+      .status.warning {
+        background-color: #fff3cd;
+        color: #856404;
+        border: 1px solid #ffeaa7;
+      }
+
+      .progress {
+        width: 100%;
+        height: 20px;
+        background-color: #e9ecef;
+        border-radius: 10px;
+        overflow: hidden;
+        margin-bottom: 15px;
+      }
+
+      .progress-bar {
+        height: 100%;
+        background-color: #007bff;
+        transition: width 0.3s ease;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: white;
+        font-size: 12px;
+      }
+
+      .audio-container {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+        gap: 20px;
+        margin-top: 20px;
+      }
+
+      .audio-player {
+        background: #f8f9fa;
+        padding: 15px;
+        border-radius: 5px;
+        border: 1px solid #dee2e6;
+      }
+
+      .audio-player h3 {
+        margin-top: 0;
+        color: #495057;
+      }
+
+      .audio-player audio {
+        width: 100%;
+        margin-top: 10px;
+      }
+
+      .stats {
+        background: #f8f9fa;
+        padding: 15px;
+        border-radius: 5px;
+        border: 1px solid #dee2e6;
+        font-family: monospace;
+        font-size: 12px;
+      }
+
+      .stats h3 {
+        margin-top: 0;
+        color: #495057;
+      }
+
+      .hidden {
+        display: none;
+      }
+
+      .config-section {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 15px;
+        margin-bottom: 20px;
+      }
+
+      .config-group {
+        display: flex;
+        flex-direction: column;
+      }
+
+      .config-group label {
+        margin-bottom: 5px;
+        font-weight: bold;
+        color: #555;
+      }
+
+      .config-group select,
+      .config-group input {
+        padding: 8px;
+        border: 1px solid #ccc;
+        border-radius: 3px;
+      }
+
+      .logs-section {
+        max-height: 300px;
+        overflow-y: auto;
+        background: #f8f9fa;
+        padding: 10px;
+        border-radius: 5px;
+        border: 1px solid #dee2e6;
+        font-family: monospace;
+        font-size: 12px;
+      }
+
+      .log-entry {
+        margin-bottom: 5px;
+        padding: 2px 0;
+      }
+
+      .log-entry.error {
+        color: #dc3545;
+      }
+
+      .log-entry.warn {
+        color: #ffc107;
+      }
+
+      .log-entry.info {
+        color: #17a2b8;
+      }
+
+      .log-entry.debug {
+        color: #6c757d;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>🎵 SpleeterJS - Basic Audio Separation Demo</h1>
+
+      <!-- Configuration Section -->
+      <div class="section">
+        <h2>Configuration</h2>
+        <div class="config-section">
+          <div class="config-group">
+            <label for="modelSelect">Model Type:</label>
+            <select id="modelSelect">
+              <option value="2stems">2 Stems (Vocals/Accompaniment)</option>
+              <option value="4stems">4 Stems (Vocals/Drums/Bass/Other)</option>
+              <option value="5stems">
+                5 Stems (Vocals/Drums/Bass/Piano/Other)
+              </option>
+            </select>
+          </div>
+          <div class="config-group">
+            <label for="chunkSize">Chunk Size (seconds):</label>
+            <input type="number" id="chunkSize" value="10" min="1" max="60" />
+          </div>
+          <div class="config-group">
+            <label for="enableLogs">Enable Logs:</label>
+            <select id="enableLogs">
+              <option value="true">Yes</option>
+              <option value="false">No</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <!-- File Input Section -->
+      <div class="section">
+        <h2>Audio File</h2>
+        <div class="file-input">
+          <input type="file" id="audioFile" accept="audio/*" />
+        </div>
+
+        <div class="controls">
+          <button id="loadModelBtn" class="btn-primary">Load Model</button>
+          <button id="separateBtn" class="btn-primary" disabled>
+            Separate Audio
+          </button>
+          <button id="cancelBtn" class="btn-danger" disabled>Cancel</button>
+          <button id="clearBtn" class="btn-secondary">Clear All</button>
+        </div>
+      </div>
+
+      <!-- Status Section -->
+      <div id="statusSection" class="hidden">
+        <div id="statusDiv" class="status"></div>
+        <div id="progressContainer" class="hidden">
+          <div class="progress">
+            <div id="progressBar" class="progress-bar" style="width: 0%">
+              0%
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Results Section -->
+      <div id="resultsSection" class="section hidden">
+        <h2>Separated Stems</h2>
+        <div id="audioContainer" class="audio-container"></div>
+      </div>
+
+      <!-- Statistics Section -->
+      <div id="statsSection" class="section hidden">
+        <h2>Processing Statistics</h2>
+        <div id="statsDiv" class="stats"></div>
+      </div>
+
+      <!-- Logs Section -->
+      <div id="logsSection" class="section hidden">
+        <h2>Processing Logs</h2>
+        <div class="controls">
+          <button id="clearLogsBtn" class="btn-secondary">Clear Logs</button>
+        </div>
+        <div id="logsContainer" class="logs-section"></div>
+      </div>
+    </div>
+
+    <!-- Load required libraries -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest"></script>
+    <script src="../src/Logger.js"></script>
+    <script src="../src/AudioProcessor.js"></script>
+    <script src="../src/STFTProcessor.js"></script>
+    <script src="../src/ModelLoader.js"></script>
+    <script src="../src/SpleeterJS.js"></script>
+
+    <script>
+      class SpleeterDemo {
+        constructor() {
+          this.spleeter = null;
+          this.isModelLoaded = false;
+          this.initializeElements();
+          this.bindEvents();
+        }
+
+        initializeElements() {
+          this.elements = {
+            modelSelect: document.getElementById("modelSelect"),
+            chunkSize: document.getElementById("chunkSize"),
+            enableLogs: document.getElementById("enableLogs"),
+            audioFile: document.getElementById("audioFile"),
+            loadModelBtn: document.getElementById("loadModelBtn"),
+            separateBtn: document.getElementById("separateBtn"),
+            cancelBtn: document.getElementById("cancelBtn"),
+            clearBtn: document.getElementById("clearBtn"),
+            statusSection: document.getElementById("statusSection"),
+            statusDiv: document.getElementById("statusDiv"),
+            progressContainer: document.getElementById("progressContainer"),
+            progressBar: document.getElementById("progressBar"),
+            resultsSection: document.getElementById("resultsSection"),
+            audioContainer: document.getElementById("audioContainer"),
+            statsSection: document.getElementById("statsSection"),
+            statsDiv: document.getElementById("statsDiv"),
+            logsSection: document.getElementById("logsSection"),
+            logsContainer: document.getElementById("logsContainer"),
+            clearLogsBtn: document.getElementById("clearLogsBtn"),
+          };
+        }
+
+        bindEvents() {
+          this.elements.loadModelBtn.addEventListener("click", () =>
+            this.loadModel()
+          );
+          this.elements.separateBtn.addEventListener("click", () =>
+            this.separateAudio()
+          );
+          this.elements.cancelBtn.addEventListener("click", () =>
+            this.cancelSeparation()
+          );
+          this.elements.clearBtn.addEventListener("click", () =>
+            this.clearAll()
+          );
+          this.elements.clearLogsBtn.addEventListener("click", () =>
+            this.clearLogs()
+          );
+          this.elements.audioFile.addEventListener("change", () =>
+            this.onFileSelected()
+          );
+
+          // Update logs when enabled/disabled
+          this.elements.enableLogs.addEventListener("change", () => {
+            if (this.spleeter) {
+              this.spleeter.enableLogs(
+                this.elements.enableLogs.value === "true"
+              );
+            }
+          });
+        }
+
+        async loadModel() {
+          try {
+            this.showStatus("Loading model...", "info");
+            this.setLoadingState(true);
+
+            const modelType = this.elements.modelSelect.value;
+
+            // Initialize SpleeterJS if not already done
+            if (!this.spleeter) {
+              this.spleeter = new SpleeterJS({
+                enableLogs: this.elements.enableLogs.value === "true",
+                chunkSize: parseInt(this.elements.chunkSize.value),
+              });
+            }
+
+            await this.spleeter.loadModel(modelType);
+
+            this.isModelLoaded = true;
+            this.showStatus(
+              `Model ${modelType} loaded successfully!`,
+              "success"
+            );
+            this.updateButtons();
+            this.updateLogs();
+          } catch (error) {
+            this.showStatus(`Failed to load model: ${error.message}`, "error");
+            console.error("Model loading error:", error);
+          } finally {
+            this.setLoadingState(false);
+          }
+        }
+
+        async separateAudio() {
+          try {
+            const file = this.elements.audioFile.files[0];
+            if (!file) {
+              this.showStatus("Please select an audio file first", "warning");
+              return;
+            }
+
+            this.showStatus("Starting audio separation...", "info");
+            this.setLoadingState(true);
+            this.hideResults();
+
+            const options = {
+              chunkSize: parseInt(this.elements.chunkSize.value),
+            };
+
+            const stems = await this.spleeter.separate(file, options);
+
+            this.showStatus("Audio separation completed!", "success");
+            this.displayResults(stems);
+            this.displayStats();
+            this.updateLogs();
+          } catch (error) {
+            if (error.message.includes("cancelled")) {
+              this.showStatus("Separation was cancelled", "warning");
+            } else {
+              this.showStatus(`Separation failed: ${error.message}`, "error");
+            }
+            console.error("Separation error:", error);
+          } finally {
+            this.setLoadingState(false);
+            this.hideProgress();
+          }
+        }
+
+        cancelSeparation() {
+          if (this.spleeter) {
+            this.spleeter.cancelSeparation();
+            this.showStatus("Cancelling separation...", "warning");
+          }
+        }
+
+        clearAll() {
+          if (this.spleeter) {
+            this.spleeter.dispose();
+          }
+
+          this.spleeter = null;
+          this.isModelLoaded = false;
+          this.elements.audioFile.value = "";
+          this.hideResults();
+          this.hideStatus();
+          this.updateButtons();
+          this.clearLogs();
+        }
+
+        clearLogs() {
+          if (this.spleeter) {
+            this.spleeter.clearLogs();
+          }
+          this.elements.logsContainer.innerHTML = "";
+        }
+
+        onFileSelected() {
+          const file = this.elements.audioFile.files[0];
+          if (file) {
+            this.showStatus(
+              `Selected: ${file.name} (${this.formatFileSize(file.size)})`,
+              "info"
+            );
+          }
+          this.updateButtons();
+        }
+
+        displayResults(stems) {
+          const container = this.elements.audioContainer;
+          container.innerHTML = "";
+
+          // Display original audio
+          const originalFile = this.elements.audioFile.files[0];
+          const originalAudio = this.createAudioPlayer(
+            "Original",
+            originalFile
+          );
+          container.appendChild(originalAudio);
+
+          // Display separated stems
+          Object.keys(stems).forEach((instrument) => {
+            const audioBuffer = stems[instrument];
+            const audioBlob = this.audioBufferToBlob(audioBuffer);
+            const audioUrl = URL.createObjectURL(audioBlob);
+
+            const audioPlayer = this.createAudioPlayer(instrument, audioUrl);
+            container.appendChild(audioPlayer);
+          });
+
+          this.elements.resultsSection.classList.remove("hidden");
+        }
+
+        createAudioPlayer(label, source) {
+          const div = document.createElement("div");
+          div.className = "audio-player";
+
+          const h3 = document.createElement("h3");
+          h3.textContent = label;
+          div.appendChild(h3);
+
+          const audio = document.createElement("audio");
+          audio.controls = true;
+          audio.style.width = "100%";
+
+          if (typeof source === "string") {
+            audio.src = source;
+          } else {
+            const audioBlob = this.audioBufferToBlob(source);
+            audio.src = URL.createObjectURL(audioBlob);
+          }
+
+          div.appendChild(audio);
+          return div;
+        }
+
+        audioBufferToBlob(audioBuffer) {
+          const numberOfChannels = audioBuffer.numberOfChannels;
+          const length = audioBuffer.length;
+          const sampleRate = audioBuffer.sampleRate;
+
+          // Create WAV file
+          const arrayBuffer = new ArrayBuffer(
+            44 + length * numberOfChannels * 2
+          );
+          const view = new DataView(arrayBuffer);
+
+          // WAV header
+          const writeString = (offset, string) => {
+            for (let i = 0; i < string.length; i++) {
+              view.setUint8(offset + i, string.charCodeAt(i));
+            }
+          };
+
+          writeString(0, "RIFF");
+          view.setUint32(4, 36 + length * numberOfChannels * 2, true);
+          writeString(8, "WAVE");
+          writeString(12, "fmt ");
+          view.setUint32(16, 16, true);
+          view.setUint16(20, 1, true);
+          view.setUint16(22, numberOfChannels, true);
+          view.setUint32(24, sampleRate, true);
+          view.setUint32(28, sampleRate * numberOfChannels * 2, true);
+          view.setUint16(32, numberOfChannels * 2, true);
+          view.setUint16(34, 16, true);
+          writeString(36, "data");
+          view.setUint32(40, length * numberOfChannels * 2, true);
+
+          // Convert float samples to 16-bit PCM
+          let offset = 44;
+          for (let i = 0; i < length; i++) {
+            for (let channel = 0; channel < numberOfChannels; channel++) {
+              const sample = Math.max(
+                -1,
+                Math.min(1, audioBuffer.getChannelData(channel)[i])
+              );
+              view.setInt16(offset, sample * 0x7fff, true);
+              offset += 2;
+            }
+          }
+
+          return new Blob([arrayBuffer], { type: "audio/wav" });
+        }
+
+        displayStats() {
+          const stats = this.spleeter.getProcessingStats();
+          const memory = this.spleeter.getMemoryUsage();
+          const system = this.spleeter.getSystemInfo();
+
+          let statsHtml = "<h3>Processing Statistics</h3>";
+          statsHtml += `<strong>Total Duration:</strong> ${stats.totalDuration}<br>`;
+          statsHtml += `<strong>Audio Duration:</strong> ${stats.audioDuration.toFixed(
+            2
+          )} seconds<br>`;
+          statsHtml += `<strong>Processing Speed:</strong> ${stats.processingSpeed}<br>`;
+          statsHtml += `<strong>Model Type:</strong> ${stats.modelType}<br><br>`;
+
+          statsHtml += "<h3>Memory Usage</h3>";
+          statsHtml += `<strong>Tensors:</strong> ${memory.numTensors}<br>`;
+          statsHtml += `<strong>Memory:</strong> ${memory.bytesFormatted}<br><br>`;
+
+          statsHtml += "<h3>System Info</h3>";
+          statsHtml += `<strong>Platform:</strong> ${system.platform}<br>`;
+          statsHtml += `<strong>CPU Cores:</strong> ${system.hardwareConcurrency}<br>`;
+          statsHtml += `<strong>Web Audio API:</strong> ${
+            system.webAudioAPI ? "Yes" : "No"
+          }<br>`;
+          statsHtml += `<strong>Web Workers:</strong> ${
+            system.webWorkers ? "Yes" : "No"
+          }<br>`;
+          statsHtml += `<strong>TensorFlow.js:</strong> ${system.tensorflow.version}<br>`;
+          statsHtml += `<strong>Backend:</strong> ${system.tensorflow.backend}<br>`;
+
+          this.elements.statsDiv.innerHTML = statsHtml;
+          this.elements.statsSection.classList.remove("hidden");
+        }
+
+        updateLogs() {
+          if (!this.spleeter) return;
+
+          const logs = this.spleeter.getLogs();
+          const container = this.elements.logsContainer;
+          container.innerHTML = "";
+
+          logs.forEach((log) => {
+            const logDiv = document.createElement("div");
+            logDiv.className = `log-entry ${log.level.toLowerCase()}`;
+            logDiv.innerHTML = `<strong>[${log.timestamp}]</strong> [${log.level}] [${log.component}] ${log.message}`;
+            container.appendChild(logDiv);
+          });
+
+          this.elements.logsSection.classList.remove("hidden");
+          container.scrollTop = container.scrollHeight;
+        }
+
+        showStatus(message, type) {
+          this.elements.statusDiv.textContent = message;
+          this.elements.statusDiv.className = `status ${type}`;
+          this.elements.statusSection.classList.remove("hidden");
+        }
+
+        hideStatus() {
+          this.elements.statusSection.classList.add("hidden");
+        }
+
+        showProgress() {
+          this.elements.progressContainer.classList.remove("hidden");
+        }
+
+        hideProgress() {
+          this.elements.progressContainer.classList.add("hidden");
+        }
+
+        updateProgress(percent) {
+          this.elements.progressBar.style.width = `${percent}%`;
+          this.elements.progressBar.textContent = `${percent}%`;
+        }
+
+        hideResults() {
+          this.elements.resultsSection.classList.add("hidden");
+          this.elements.statsSection.classList.add("hidden");
+        }
+
+        updateButtons() {
+          const hasFile = this.elements.audioFile.files.length > 0;
+
+          this.elements.loadModelBtn.disabled = false;
+          this.elements.separateBtn.disabled = !this.isModelLoaded || !hasFile;
+          this.elements.cancelBtn.disabled =
+            !this.spleeter || !this.spleeter.isProcessingAudio();
+        }
+
+        setLoadingState(loading) {
+          this.elements.loadModelBtn.disabled = loading;
+          this.elements.separateBtn.disabled = loading || !this.isModelLoaded;
+          this.elements.cancelBtn.disabled =
+            !loading || !this.spleeter || !this.spleeter.isProcessingAudio();
+
+          if (loading) {
+            this.showProgress();
+            this.simulateProgress();
+          } else {
+            this.hideProgress();
+          }
+        }
+
+        simulateProgress() {
+          let progress = 0;
+          const interval = setInterval(() => {
+            if (!this.elements.progressContainer.classList.contains("hidden")) {
+              progress += Math.random() * 10;
+              if (progress > 90) progress = 90;
+              this.updateProgress(Math.round(progress));
+            } else {
+              clearInterval(interval);
+            }
+          }, 200);
+        }
+
+        formatFileSize(bytes) {
+          if (bytes === 0) return "0 Bytes";
+          const k = 1024;
+          const sizes = ["Bytes", "KB", "MB", "GB"];
+          const i = Math.floor(Math.log(bytes) / Math.log(k));
+          return (
+            parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i]
+          );
+        }
+      }
+
+      // Initialize demo when page loads
+      document.addEventListener("DOMContentLoaded", () => {
+        new SpleeterDemo();
+      });
+    </script>
+  </body>
+</html>
