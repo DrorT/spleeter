@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SpleeterJS Model Test</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.0.0/dist/tf.min.js"></script>
+  </head>
+  <body>
+    <h1>SpleeterJS Model Loading Test</h1>
+    <div id="status">Loading TensorFlow.js...</div>
+    <button id="loadModelBtn" disabled>Load 2stems Model</button>
+    <div id="result"></div>
+
+    <script src="../src/Logger.js"></script>
+    <script src="../src/ModelLoader.js"></script>
+
+    <script>
+      const statusDiv = document.getElementById("status");
+      const loadBtn = document.getElementById("loadModelBtn");
+      const resultDiv = document.getElementById("result");
+
+      // Wait for TensorFlow.js to load
+      tf.ready().then(() => {
+        statusDiv.textContent = "TensorFlow.js loaded successfully!";
+        loadBtn.disabled = false;
+      });
+
+      loadBtn.addEventListener("click", async () => {
+        try {
+          statusDiv.textContent = "Loading model...";
+          loadBtn.disabled = true;
+
+          // Create logger
+          const logger = new window.SpleeterJS.Logger();
+
+          // Create model loader
+          const modelLoader = new window.SpleeterJS.ModelLoader({ logger });
+
+          console.log("🔍 ModelLoader created");
+          console.log("📋 Available models:", modelLoader.getAvailableModels());
+
+          // Load 2stems model
+          console.log("🚀 Starting model load...");
+          await modelLoader.loadModel("2stems");
+
+          console.log("✅ Model loaded successfully!");
+          console.log("🎯 Current model:", modelLoader.getCurrentModel());
+
+          statusDiv.textContent = "Model loaded successfully!";
+          resultDiv.innerHTML = `
+                    <h2>✅ Success!</h2>
+                    <p>Model loaded and ready for inference.</p>
+                    <p>Available models: ${modelLoader
+                      .getAvailableModels()
+                      .join(", ")}</p>
+                    <p>Current model: ${modelLoader.getCurrentModel()}</p>
+                    <p><strong>Debug Info:</strong></p>
+                    <ul>
+                      <li>TensorFlow.js version: ${tf.version.tfjs}</li>
+                      <li>Backend: ${tf.getBackend()}</li>
+                      <li>Model path: ${
+                        modelLoader.modelConfigs["2stems"].path
+                      }</li>
+                    </ul>
+                `;
+
+          // Clean up
+          modelLoader.dispose();
+        } catch (error) {
+          statusDiv.textContent = "❌ Error loading model";
+          resultDiv.innerHTML = `
+                    <h2>❌ Error</h2>
+                    <pre>${error.message}</pre>
+                    <pre>${error.stack}</pre>
+                `;
+          console.error("Model loading error:", error);
+        }
+      });
+    </script>
+  </body>
+</html>

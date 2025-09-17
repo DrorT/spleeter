@@ -130,21 +130,28 @@ class ModelLoader {
    */
   async warmupModel(model, config) {
     try {
-      // Create dummy input based on expected shape
-      const dummyShape = this.getInputShape(config);
-      const dummyInput = tf.zeros(dummyShape);
+      // Create dummy inputs based on model signature
+      // The model expects pre-processed audio features, not raw waveform
+      const stftShape = [1, 2049, 2]; // mix_stft: [batch, freq_bins, channels]
+      const spectrogramShape = [1, 512, 1024, 2]; // mix_spectrogram: [batch, time, freq, channels]
+
+      const dummyStft = tf.zeros(stftShape, "complex64");
+      const dummySpectrogram = tf.zeros(spectrogramShape, "float32");
 
       // For GraphModel, we need to provide inputs as an object with named inputs
+      // Based on model signature: audio_id, mix_stft, mix_spectrogram
       const inputs = {
-        Placeholder: dummyInput,
-        Placeholder_1: tf.fill([1], ""), // Empty string for the string input
+        audio_id: tf.fill([1], ""), // String input for audio_id
+        mix_stft: dummyStft, // Complex STFT input
+        mix_spectrogram: dummySpectrogram, // Float spectrogram input
       };
 
-      // Run inference using execute for GraphModel
-      const predictions = await model.execute(inputs);
+      // Run inference using executeAsync for GraphModel (handles dynamic ops)
+      const predictions = await model.executeAsync(inputs);
 
       // Cleanup tensors
-      dummyInput.dispose();
+      dummyStft.dispose();
+      dummySpectrogram.dispose();
       if (Array.isArray(predictions)) {
         predictions.forEach((pred) => pred.dispose());
       } else {
@@ -153,7 +160,7 @@ class ModelLoader {
 
       this.logger.debug("ModelLoader", "Model warmup completed");
     } catch (error) {
-      this.logger.warn("ModelLoader", "Model warmup failed", error);
+      this.logger.error("ModelLoader", "Model warmup failed", error);
       // Don't throw here - warmup failure shouldn't prevent model usage
     }
   }
@@ -164,9 +171,9 @@ class ModelLoader {
    * @returns {Array} Input shape
    */
   getInputShape(config) {
-    // Based on Spleeter's input shape: [batch, time, frequency, channels]
-    // For real-time processing, we use batch size 1
-    return [1, 512, 1024, 2]; // [batch, frames, freq_bins, channels]
+    // Based on the actual model signature, Placeholder expects raw waveform: [-1, 2]
+    // This is different from the spectrogram shape [1, 512, 1024, 2]
+    return [-1, 2]; // [batch, channels] for raw waveform input
   }
 
   /**
@@ -260,14 +267,27 @@ class ModelLoader {
     try {
       const startTime = performance.now();
 
-      // For GraphModel, use execute with named inputs
+      // For GraphModel, use executeAsync with correct input names from signature
+      // The model expects pre-processed audio features: mix_stft and mix_spectrogram
+      // For now, we'll create dummy inputs since the predict method expects a single input
+      const stftShape = [1, 2049, 2]; // mix_stft: [batch, freq_bins, channels]
+      const spectrogramShape = [1, 512, 1024, 2]; // mix_spectrogram: [batch, time, freq, channels]
+
+      const dummyStft = tf.zeros(stftShape, "complex64");
+      const dummySpectrogram = tf.zeros(spectrogramShape, "float32");
+
       const inputs = {
-        Placeholder: input,
-        Placeholder_1: tf.fill([1], ""), // Empty string for the string input
+        audio_id: tf.fill([1], ""), // String input for audio_id
+        mix_stft: dummyStft, // Complex STFT input
+        mix_spectrogram: dummySpectrogram, // Float spectrogram input
       };
 
-      // Run inference using execute for GraphModel
-      const predictions = await model.execute(inputs);
+      // Run inference using executeAsync for GraphModel (handles dynamic ops)
+      const predictions = await model.executeAsync(inputs);
+
+      // Cleanup dummy tensors
+      dummyStft.dispose();
+      dummySpectrogram.dispose();
 
       const endTime = performance.now();
       this.logger.debug("ModelLoader", "Model inference completed", {
