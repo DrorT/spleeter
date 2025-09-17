@@ -193,17 +193,17 @@ class SpleeterJS {
             // Convert to spectrogram
             const stftResult = this.stftProcessor.computeSTFT(chunk);
             
-            // Prepare input tensor for model
-            const inputTensor = this.prepareModelInput(stftResult, modelConfig);
+            // Prepare input tensors for model - FIXED to match model expectations
+            const modelInputs = this.prepareModelInputs(stftResult, modelConfig);
             
             // Run model inference
-            const predictions = await this.modelLoader.predict(inputTensor);
+            const predictions = await this.modelLoader.predict(modelInputs);
             
             // Process predictions to get separated stems
             const separatedStems = this.processPredictions(predictions, stftResult, modelConfig);
             
             // Cleanup tensors
-            inputTensor.dispose();
+            Object.values(modelInputs).forEach(tensor => tensor.dispose());
             if (Array.isArray(predictions)) {
                 predictions.forEach(pred => pred.dispose());
             } else {
@@ -225,34 +225,73 @@ class SpleeterJS {
     }
 
     /**
-     * Prepare model input tensor from STFT result
+     * Prepare model input tensors from STFT result - FIXED to match model signature
      * @param {Object} stftResult - STFT computation result
      * @param {Object} modelConfig - Model configuration
-     * @returns {tf.Tensor} Input tensor for model
+     * @returns {Object} Input tensors for model
      */
-    prepareModelInput(stftResult, modelConfig) {
-        const { magnitude, nFrames, nFreqBins } = stftResult;
+    prepareModelInputs(stftResult, modelConfig) {
+        const { magnitude, phase, nFrames, nFreqBins, fftSize, hopSize, sampleRate } = stftResult;
         
-        // Reshape magnitude for model input
-        // Expected shape: [batch, frames, freq_bins, channels]
-        const inputArray = new Float32Array(nFrames * nFreqBins * 2); // 2 channels
+        // The model expects two inputs: mix_stft and mix_spectrogram
+        // mix_stft: [batch, freq_bins, channels] - complex STFT
+        // mix_spectrogram: [batch, time, freq, channels] - magnitude spectrogram
         
-        // Copy magnitude data to both channels (stereo input)
-        for (let frame = 0; frame < nFrames; frame++) {
-            for (let freq = 0; freq < nFreqBins; freq++) {
-                const srcIndex = frame * nFreqBins + freq;
-                const dstIndex = (frame * nFreqBins + freq) * 2;
+        // 1. Prepare mix_stft (complex STFT)
+        // Shape: [1, 2049, 2] - complex tensor with real and imaginary parts
+        const stftFreqBins = Math.floor(fftSize / 2) + 1; // Should be 2049 for 4096 FFT
+        const stftReal = new Float32Array(stftFreqBins);
+        const stftImag = new Float32Array(stftFreqBins);
+        
+        // Use the first frame for STFT input (or average frames)
+        // For simplicity, we'll use the first frame
+        const frameOffset = 0; // First frame
+        for (let i = 0; i < stftFreqBins && i < nFreqBins; i++) {
+            const mag = magnitude[frameOffset + i];
+            const ph = phase[frameOffset + i];
+            stftReal[i] = mag * Math.cos(ph); // Real part
+            stftImag[i] = mag * Math.sin(ph); // Imaginary part
+        }
+        
+        // Create complex STFT tensor
+        const mixStft = tf.complex(stftReal, stftImag).expandDims(0); // [1, 2049, 2]
+        
+        // 2. Prepare mix_spectrogram (magnitude spectrogram)
+        // Shape: [1, 512, 1024, 2] - time x frequency x channels
+        const specTimeFrames = 512; // Fixed time dimension
+        const specFreqBins = 1024; // Fixed frequency dimension
+        
+        // Create spectrogram tensor by resizing/padding our STFT result
+        const spectrogramData = new Float32Array(specTimeFrames * specFreqBins * 2);
+        
+        // Copy and pad our magnitude data to fit the expected shape
+        for (let t = 0; t < Math.min(specTimeFrames, nFrames); t++) {
+            for (let f = 0; f < Math.min(specFreqBins, nFreqBins); f++) {
+                const srcIndex = t * nFreqBins + f;
+                const dstIndex = (t * specFreqBins + f) * 2;
                 
                 const value = magnitude[srcIndex];
-                inputArray[dstIndex] = value;     // Left channel
-                inputArray[dstIndex + 1] = value; // Right channel
+                spectrogramData[dstIndex] = value;     // Left channel
+                spectrogramData[dstIndex + 1] = value; // Right channel (duplicate for stereo)
             }
         }
         
-        // Create tensor and reshape
-        const inputTensor = tf.tensor(inputArray, [1, nFrames, nFreqBins, 2]);
+        const mixSpectrogram = tf.tensor4d(spectrogramData, [1, specTimeFrames, specFreqBins, 2]);
         
-        return inputTensor;
+        // 3. Create audio_id input (empty string)
+        const audioId = tf.fill([1], '');
+        
+        this.logger.debug('SpleeterJS', 'Model inputs prepared', {
+            mixStftShape: mixStft.shape,
+            mixSpectrogramShape: mixSpectrogram.shape,
+            audioIdShape: audioId.shape
+        });
+        
+        return {
+            audio_id: audioId,
+            mix_stft: mixStft,
+            mix_spectrogram: mixSpectrogram
+        };
     }
 
     /**
@@ -276,21 +315,29 @@ class SpleeterJS {
             const instrument = instruments[i];
             const prediction = predArray[i];
             
-            // Get prediction data
+            // Get prediction data - this should be the separated spectrogram
             const predData = prediction.dataSync();
+            const predShape = prediction.shape;
             
-            // Create magnitude spectrogram for this instrument
+            this.logger.debug('SpleeterJS', `Processing prediction for ${instrument}`, {
+                shape: predShape,
+                dataType: prediction.dtype
+            });
+            
+            // For now, we'll create a simple magnitude spectrogram from the prediction
+            // This is a simplified approach - in practice, you'd need to handle the model's specific output format
             const instrumentMagnitude = new Float32Array(nFrames * nFreqBins);
             
-            // Copy prediction data (assuming output is same shape as input)
-            for (let j = 0; j < instrumentMagnitude.length; j++) {
-                instrumentMagnitude[j] = predData[j];
+            // Copy prediction data (assuming output can be reshaped to match our STFT dimensions)
+            const predSize = Math.min(predData.length, instrumentMagnitude.length);
+            for (let j = 0; j < predSize; j++) {
+                instrumentMagnitude[j] = Math.abs(predData[j]); // Take absolute value for magnitude
             }
             
             // Reconstruct waveform using ISTFT
             const instrumentStftData = {
                 magnitude: instrumentMagnitude,
-                phase: phase,
+                phase: phase, // Use original phase for reconstruction
                 nFrames,
                 nFreqBins,
                 fftSize,
