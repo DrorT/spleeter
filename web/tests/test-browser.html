@@ -10,6 +10,7 @@
     <h1>SpleeterJS Model Loading Test</h1>
     <div id="status">Loading TensorFlow.js...</div>
     <button id="loadModelBtn" disabled>Load 2stems Model</button>
+    <button id="warmupModelBtn" disabled>Test Warmup</button>
     <div id="result"></div>
 
     <script src="../src/Logger.js"></script>
@@ -18,7 +19,9 @@
     <script>
       const statusDiv = document.getElementById("status");
       const loadBtn = document.getElementById("loadModelBtn");
+      const warmupBtn = document.getElementById("warmupModelBtn");
       const resultDiv = document.getElementById("result");
+      let modelLoader = null; // To share modelLoader instance
 
       // Wait for TensorFlow.js to load
       tf.ready().then(() => {
@@ -26,18 +29,80 @@
         loadBtn.disabled = false;
       });
 
+      warmupBtn.addEventListener("click", async () => {
+        if (!modelLoader) {
+          statusDiv.textContent = "Loading model first...";
+          try {
+            const logger = new window.SpleeterJS.Logger();
+            modelLoader = new window.SpleeterJS.ModelLoader({ logger });
+            await modelLoader.loadModel("2stems");
+            statusDiv.textContent = "Model loaded. Starting warmup...";
+          } catch (error) {
+            statusDiv.textContent = "❌ Error loading model for warmup";
+            resultDiv.innerHTML = `
+                      <h2>❌ Error Loading Model</h2>
+                      <pre>${error.message}</pre>
+                      <pre>${error.stack}</pre>
+                  `;
+            console.error("Model loading error during warmup test:", error);
+            return;
+          }
+        } else {
+          statusDiv.textContent = "Starting warmup...";
+        }
+
+        try {
+          const model = modelLoader.getModel("2stems");
+          const config = modelLoader.getModelConfig("2stems");
+          if (!model || !config) {
+            throw new Error("Model or config not found for 2stems.");
+          }
+          
+          console.log("🔥 Starting warmup process...");
+          // The warmupModel method is part of ModelLoader, but let's call it directly for testing
+          // Note: warmupModel is called internally by loadModel, but we can call it again.
+          // For a true test, we might want to bypass the internal call or inspect its effects.
+          // However, to see the error, calling it again is fine.
+          await modelLoader.warmupModel(model, config);
+
+          console.log("✅ Warmup completed successfully!");
+          statusDiv.textContent = "Warmup successful!";
+          resultDiv.innerHTML = `
+                    <h2>✅ Warmup Success!</h2>
+                    <p>The model warmup process completed without errors.</p>
+                    <p><strong>Debug Info:</strong></p>
+                    <ul>
+                      <li>TensorFlow.js version: ${tf.version.tfjs}</li>
+                      <li>Backend: ${tf.getBackend()}</li>
+                      <li>Memory after warmup: ${JSON.stringify(tf.memory())}</li>
+                    </ul>
+                `;
+        } catch (error) {
+          statusDiv.textContent = "❌ Error during warmup";
+          resultDiv.innerHTML = `
+                    <h2>❌ Warmup Error</h2>
+                    <p><strong>Error Message:</strong></p>
+                    <pre>${error.message}</pre>
+                    <p><strong>Stack Trace:</strong></p>
+                    <pre>${error.stack}</pre>
+                `;
+          console.error("Warmup error:", error);
+        }
+      });
+
       loadBtn.addEventListener("click", async () => {
         try {
           statusDiv.textContent = "Loading model...";
           loadBtn.disabled = true;
+          warmupBtn.disabled = true; // Disable warmup button during load
 
-          // Create logger
-          const logger = new window.SpleeterJS.Logger();
+          // Create logger and model loader if not already created
+          if (!modelLoader) {
+            const logger = new window.SpleeterJS.Logger();
+            modelLoader = new window.SpleeterJS.ModelLoader({ logger });
+          }
 
-          // Create model loader
-          const modelLoader = new window.SpleeterJS.ModelLoader({ logger });
-
-          console.log("🔍 ModelLoader created");
+          console.log("🔍 ModelLoader created/retrieved");
           console.log("📋 Available models:", modelLoader.getAvailableModels());
 
           // Load 2stems model
@@ -48,9 +113,10 @@
           console.log("🎯 Current model:", modelLoader.getCurrentModel());
 
           statusDiv.textContent = "Model loaded successfully!";
+          warmupBtn.disabled = false; // Enable warmup button after successful load
           resultDiv.innerHTML = `
                     <h2>✅ Success!</h2>
-                    <p>Model loaded and ready for inference.</p>
+                    <p>Model loaded and ready for inference. You can now test the warmup process.</p>
                     <p>Available models: ${modelLoader
                       .getAvailableModels()
                       .join(", ")}</p>
@@ -64,11 +130,9 @@
                       }</li>
                     </ul>
                 `;
-
-          // Clean up
-          modelLoader.dispose();
         } catch (error) {
           statusDiv.textContent = "❌ Error loading model";
+          warmupBtn.disabled = true; // Ensure warmup button is disabled on error
           resultDiv.innerHTML = `
                     <h2>❌ Error</h2>
                     <pre>${error.message}</pre>

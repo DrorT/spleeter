@@ -1,0 +1,22 @@
+{
+  "name": "spleeter-js-web",
+  "version": "1.0.0",
+  "description": "JavaScript version of Spleeter for audio stem separation - Web environment",
+  "main": "test_warmup_debug.js",
+  "scripts": {
+    "test": "node test_warmup_debug.js"
+  },
+  "keywords": [
+    "audio",
+    "stem-separation",
+    "spleeter",
+    "tensorflow.js",
+    "machine-learning"
+  ],
+  "author": "Your Name / Organization",
+  "license": "MIT",
+  "dependencies": {
+    "@tensorflow/tfjs": "^4.23.0"
+  },
+  "devDependencies": {}
+}
