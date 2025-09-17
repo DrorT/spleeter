@@ -115,3 +115,5 @@ spleeter-feedstock/
 
 output/
 useless_config.json
+
+web/node_modules/

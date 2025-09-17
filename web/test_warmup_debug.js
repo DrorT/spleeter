@@ -13,11 +13,10 @@ async function testWarmup() {
 
     // 1. Model Loading
     console.log('Step 1: Loading the model...');
-    const modelPath = path.resolve(__dirname, 'models/2stems/model.json'); // Example with 2stems model
-    let model;
+    let modelLoader;
     try {
-        const modelLoader = new ModelLoader();
-        model = await modelLoader.load(modelPath);
+        modelLoader = new ModelLoader();
+        await modelLoader.loadModel('2stems');
         console.log('Model loaded successfully.');
     } catch (error) {
         console.error('Error loading model:', error);
@@ -27,46 +26,54 @@ async function testWarmup() {
     // 2. Warmup Process
     console.log('Step 2: Attempting model warmup...');
     try {
-        // We need to determine the expected input shape and type for the warmup.
-        // This will likely involve inspecting the model's input signature or
-        // referring to the Python implementation.
-        // For now, let's assume a common input shape for audio models.
-        // This is a placeholder and will likely need adjustment.
-        const warmupInputShape = [1, 512, 2, 1]; // Example: [batchSize, frames, channels, ?]
-        // Or it could be [batchSize, frequencyBins, timeSteps, channels] for spectrograms
+        // Create proper inputs for the Spleeter model based on its signature
+        // The model expects: audio_id, mix_stft, mix_spectrogram
         
-        // The Python implementation might use dummy data or a specific audio snippet.
-        // Let's try with zeros first.
-        const warmupInput = tf.zeros(warmupInputShape);
+        // 1. audio_id: string tensor
+        const audioId = tf.fill([1], '');
+        
+        // 2. mix_stft: complex STFT tensor [1, 2049, 2]
+        const stftShape = [1, 2049, 2];
+        const stftReal = new Float32Array(2049);
+        const stftImag = new Float32Array(2049);
+        const mixStft = tf.complex(stftReal, stftImag).expandDims(0);
+        
+        // 3. mix_spectrogram: magnitude spectrogram [1, 512, 1024, 2]
+        const spectrogramShape = [1, 512, 1024, 2];
+        const spectrogramData = new Float32Array(512 * 1024 * 2);
+        const mixSpectrogram = tf.tensor4d(spectrogramData, spectrogramShape);
+        
+        const inputs = {
+            audio_id: audioId,
+            mix_stft: mixStft,
+            mix_spectrogram: mixSpectrogram
+        };
 
-        console.log(`Using warmup input shape: ${warmupInputShape}`);
+        console.log('Using model inputs with shapes:', {
+            audio_id: audioId.shape,
+            mix_stft: mixStft.shape,
+            mix_spectrogram: mixSpectrogram.shape
+        });
         
-        // The model might have a specific method for warmup, or we might just run a prediction.
-        // Let's assume a prediction for now.
-        const warmupResult = model.predict(warmupInput);
-        
-        // Ensure the prediction completes by awaiting its data (if it's a promise)
-        // or by synchronously getting data.
-        if (warmupResult && warmupResult.dataSync) {
-            warmupResult.dataSync(); // Force execution
-        } else if (warmupResult && warmupResult.then) {
-            await warmupResult; // If predict returns a promise
-        }
+        // Run inference using the updated predict method
+        const predictions = await modelLoader.predict(inputs);
 
         console.log('Warmup completed successfully.');
         console.log('Warmup output shape(s):');
-        if (Array.isArray(warmupResult)) {
-            warmupResult.forEach((tensor, i) => console.log(`  Output ${i}: ${tensor.shape}`));
-        } else if (warmupResult && warmupResult.shape) {
-            console.log(`  Output: ${warmupResult.shape}`);
+        if (Array.isArray(predictions)) {
+            predictions.forEach((tensor, i) => console.log(`  Output ${i}: ${tensor.shape}`));
+        } else if (predictions && predictions.shape) {
+            console.log(`  Output: ${predictions.shape}`);
         }
 
         // Dispose tensors to free memory
-        warmupInput.dispose();
-        if (Array.isArray(warmupResult)) {
-            warmupResult.forEach(tensor => tensor.dispose());
-        } else if (warmupResult) {
-            warmupResult.dispose();
+        audioId.dispose();
+        mixStft.dispose();
+        mixSpectrogram.dispose();
+        if (Array.isArray(predictions)) {
+            predictions.forEach(tensor => tensor.dispose());
+        } else if (predictions) {
+            predictions.dispose();
         }
 
     } catch (error) {
@@ -77,16 +84,6 @@ async function testWarmup() {
             console.error(error.stack);
         }
         console.log('--- End Error Details ---');
-        // Potentially, we might want to inspect the model's input/output layers here
-        // to understand the expected tensor shapes.
-        if (model && model.inputs) {
-            console.log('Model input signature:');
-            model.inputs.forEach(input => console.log(`  Name: ${input.name}, Shape: ${input.shape}, Dtype: ${input.dtype}`));
-        }
-        if (model && model.outputs) {
-            console.log('Model output signature:');
-            model.outputs.forEach(output => console.log(`  Name: ${output.name}, Shape: ${output.shape}, Dtype: ${output.dtype}`));
-        }
         return; // Stop if warmup fails
     }
 
