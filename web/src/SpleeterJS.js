@@ -233,6 +233,19 @@ class SpleeterJS {
     prepareModelInputs(stftResult, modelConfig) {
         const { magnitude, phase, nFrames, nFreqBins, fftSize, hopSize, sampleRate } = stftResult;
         
+        // Validate STFT result parameters
+        if (!magnitude || !phase || !nFrames || !nFreqBins || !fftSize || isNaN(fftSize)) {
+            throw new Error(`Invalid STFT result parameters: fftSize=${fftSize}, nFrames=${nFrames}, nFreqBins=${nFreqBins}`);
+        }
+        
+        this.logger.debug('SpleeterJS', 'STFT parameters validated', {
+            fftSize,
+            nFrames,
+            nFreqBins,
+            magnitudeLength: magnitude.length,
+            phaseLength: phase.length
+        });
+        
         // The model expects two inputs: mix_stft and mix_spectrogram
         // mix_stft: [batch, freq_bins, channels] - complex STFT
         // mix_spectrogram: [batch, time, freq, channels] - magnitude spectrogram
@@ -240,21 +253,47 @@ class SpleeterJS {
         // 1. Prepare mix_stft (complex STFT)
         // Shape: [1, 2049, 2] - complex tensor with real and imaginary parts
         const stftFreqBins = Math.floor(fftSize / 2) + 1; // Should be 2049 for 4096 FFT
+        
+        // Validate calculated frequency bins
+        if (isNaN(stftFreqBins) || stftFreqBins <= 0) {
+            throw new Error(`Invalid stftFreqBins calculation: fftSize=${fftSize}, stftFreqBins=${stftFreqBins}`);
+        }
+        
         const stftReal = new Float32Array(stftFreqBins);
         const stftImag = new Float32Array(stftFreqBins);
         
-        // Use the first frame for STFT input (or average frames)
-        // For simplicity, we'll use the first frame
-        const frameOffset = 0; // First frame
+        // Aggregate data from all frames to create a proper STFT representation
+        // Instead of just using the first frame, we'll average across all frames
         for (let i = 0; i < stftFreqBins && i < nFreqBins; i++) {
-            const mag = magnitude[frameOffset + i];
-            const ph = phase[frameOffset + i];
-            stftReal[i] = mag * Math.cos(ph); // Real part
-            stftImag[i] = mag * Math.sin(ph); // Imaginary part
+            let sumReal = 0;
+            let sumImag = 0;
+            let count = 0;
+            
+            // Average across all frames
+            for (let frame = 0; frame < nFrames; frame++) {
+                const idx = frame * nFreqBins + i;
+                if (idx < magnitude.length) {
+                    const mag = magnitude[idx];
+                    const ph = phase[idx];
+                    sumReal += mag * Math.cos(ph); // Real part
+                    sumImag += mag * Math.sin(ph); // Imaginary part
+                    count++;
+                }
+            }
+            
+            stftReal[i] = count > 0 ? sumReal / count : 0;
+            stftImag[i] = count > 0 ? sumImag / count : 0;
         }
         
-        // Create complex STFT tensor
-        const mixStft = tf.complex(stftReal, stftImag).expandDims(0); // [1, 2049, 2]
+        // Create complex STFT tensor with proper shape [1, 2049, 2]
+        // The inner dimension should be 2 for complex numbers (real + imaginary)
+        const realTensor = tf.tensor2d(stftReal, [1, stftFreqBins]);
+        const imagTensor = tf.tensor2d(stftImag, [1, stftFreqBins]);
+        const mixStft = tf.stack([realTensor, imagTensor], 2); // [1, 2049, 2]
+        
+        // Cleanup intermediate tensors
+        realTensor.dispose();
+        imagTensor.dispose();
         
         // 2. Prepare mix_spectrogram (magnitude spectrogram)
         // Shape: [1, 512, 1024, 2] - time x frequency x channels

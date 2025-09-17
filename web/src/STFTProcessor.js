@@ -17,14 +17,14 @@ class STFTProcessor {
             ...options.config
         };
 
-        // Pre-compute window function
-        this.windowFunction = this.createWindowFunction();
-        
         // Performance optimization parameters
-        this.fftSize = this.frameLength;
-        this.hopSize = this.frameStep;
+        this.fftSize = this.config.frameLength;
+        this.hopSize = this.config.frameStep;
         this.nFrames = 0;
         this.nFreqBins = Math.floor(this.fftSize / 2) + 1;
+        
+        // Pre-compute window function
+        this.windowFunction = this.createWindowFunction();
 
         this.logger.info('STFTProcessor', 'STFTProcessor initialized', {
             config: this.config,
@@ -383,10 +383,10 @@ class STFTProcessor {
      */
     updateConfig(newConfig) {
         this.config = { ...this.config, ...newConfig };
-        this.windowFunction = this.createWindowFunction();
-        this.fftSize = this.frameLength;
-        this.hopSize = this.frameStep;
+        this.fftSize = this.config.frameLength;
+        this.hopSize = this.config.frameStep;
         this.nFreqBins = Math.floor(this.fftSize / 2) + 1;
+        this.windowFunction = this.createWindowFunction();
         
         this.logger.info('STFTProcessor', 'Configuration updated', {
             config: this.config,

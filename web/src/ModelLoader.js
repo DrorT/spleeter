@@ -252,11 +252,11 @@ class ModelLoader {
 
   /**
    * Run inference with loaded model
-   * @param {tf.Tensor} input - Input tensor
+   * @param {Object} inputs - Input tensors object with named inputs
    * @param {string} modelType - Model type to use
    * @returns {Promise<tf.Tensor|Array<tf.Tensor>>} Model predictions
    */
-  async predict(input, modelType = null) {
+  async predict(inputs, modelType = null) {
     const type = modelType || this.currentModel;
     const model = this.getModel(type);
 
@@ -267,33 +267,35 @@ class ModelLoader {
     try {
       const startTime = performance.now();
 
-      // For GraphModel, use executeAsync with correct input names from signature
-      // The model expects pre-processed audio features: mix_stft and mix_spectrogram
-      // For now, we'll create dummy inputs since the predict method expects a single input
-      const stftShape = [1, 2049, 2]; // mix_stft: [batch, freq_bins, channels]
-      const spectrogramShape = [1, 512, 1024, 2]; // mix_spectrogram: [batch, time, freq, channels]
+      // Validate inputs
+      if (!inputs || typeof inputs !== 'object') {
+        throw new Error('Inputs must be an object with named input tensors');
+      }
 
-      const dummyStft = tf.zeros(stftShape, "complex64");
-      const dummySpectrogram = tf.zeros(spectrogramShape, "float32");
+      // Check for required inputs based on model signature
+      const requiredInputs = ['audio_id', 'mix_stft', 'mix_spectrogram'];
+      for (const inputName of requiredInputs) {
+        if (!inputs[inputName]) {
+          throw new Error(`Missing required input: ${inputName}`);
+        }
+      }
 
-      const inputs = {
-        audio_id: tf.fill([1], ""), // String input for audio_id
-        mix_stft: dummyStft, // Complex STFT input
-        mix_spectrogram: dummySpectrogram, // Float spectrogram input
-      };
+      this.logger.debug("ModelLoader", "Running model inference", {
+        modelType: type,
+        inputNames: Object.keys(inputs),
+        inputShapes: Object.entries(inputs).reduce((acc, [name, tensor]) => {
+          acc[name] = tensor.shape;
+          return acc;
+        }, {})
+      });
 
       // Run inference using executeAsync for GraphModel (handles dynamic ops)
       const predictions = await model.executeAsync(inputs);
-
-      // Cleanup dummy tensors
-      dummyStft.dispose();
-      dummySpectrogram.dispose();
 
       const endTime = performance.now();
       this.logger.debug("ModelLoader", "Model inference completed", {
         modelType: type,
         duration: `${(endTime - startTime).toFixed(2)}ms`,
-        inputShape: input.shape,
         outputShape: Array.isArray(predictions)
           ? predictions.map((p) => p.shape)
           : predictions.shape,
