@@ -220,18 +220,18 @@ class AudioProcessor {
         }
 
         const size = chunkSize || this.chunkSize;
-        const duration = this.audioBuffer.duration;
+        const totalDuration = this.audioBuffer.duration;
         const chunks = [];
 
-        for (let startTime = 0; startTime < duration; startTime += size) {
-            const duration = Math.min(size, duration - startTime);
-            chunks.push(this.extractChunk(startTime, duration));
+        for (let startTime = 0; startTime < totalDuration; startTime += size) {
+            const chunkDuration = Math.min(size, totalDuration - startTime);
+            chunks.push(this.extractChunk(startTime, chunkDuration));
         }
 
         this.logger.info('AudioProcessor', 'Audio split into chunks', {
             totalChunks: chunks.length,
             chunkSize: size,
-            totalDuration: duration
+            totalDuration: totalDuration
         });
 
         return chunks;
