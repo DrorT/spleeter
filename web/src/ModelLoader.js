@@ -28,9 +28,11 @@ class ModelLoader {
    * @returns {Object} Model configurations
    */
   initializeModelConfigs() {
+    const basePath =
+      typeof window === "undefined" ? __dirname + "/../models/" : "../models/";
     return {
       "2stems": {
-        path: "/models/2stems/model.json",
+        path: basePath + "2stems/model.json",
         instruments: ["vocals", "accompaniment"],
         sampleRate: 44100,
         frameLength: 4096,
@@ -39,7 +41,7 @@ class ModelLoader {
         description: "Separates audio into vocals and accompaniment",
       },
       "4stems": {
-        path: "/models/4stems/model.json",
+        path: basePath + "4stems/model.json",
         instruments: ["vocals", "drums", "bass", "other"],
         sampleRate: 44100,
         frameLength: 4096,
@@ -48,7 +50,7 @@ class ModelLoader {
         description: "Separates audio into vocals, drums, bass, and other",
       },
       "5stems": {
-        path: "/models/5stems/model.json",
+        path: basePath + "5stems/model.json",
         instruments: ["vocals", "drums", "bass", "piano", "other"],
         sampleRate: 44100,
         frameLength: 4096,
@@ -90,7 +92,8 @@ class ModelLoader {
       });
 
       // Load TensorFlow.js model
-      const model = await tf.loadLayersModel(modelPath);
+      // Use loadGraphModel for GraphDef format models
+      const model = await tf.loadGraphModel(modelPath);
 
       // Store the model
       this.models.set(modelType, model);
@@ -105,7 +108,6 @@ class ModelLoader {
         `Model ${modelType} loaded successfully`,
         {
           duration: `${(endTime - startTime).toFixed(2)}ms`,
-          modelLayers: model.layers.length,
           memoryUsage: this.getMemoryUsage(),
         }
       );
@@ -123,7 +125,7 @@ class ModelLoader {
 
   /**
    * Warm up the model with dummy data to prevent first-inference lag
-   * @param {tf.LayersModel} model - TensorFlow.js model
+   * @param {tf.GraphModel} model - TensorFlow.js model
    * @param {Object} config - Model configuration
    */
   async warmupModel(model, config) {
@@ -132,8 +134,14 @@ class ModelLoader {
       const dummyShape = this.getInputShape(config);
       const dummyInput = tf.zeros(dummyShape);
 
-      // Run inference
-      const predictions = model.predict(dummyInput);
+      // For GraphModel, we need to provide inputs as an object with named inputs
+      const inputs = {
+        Placeholder: dummyInput,
+        Placeholder_1: tf.fill([1], ""), // Empty string for the string input
+      };
+
+      // Run inference using execute for GraphModel
+      const predictions = await model.execute(inputs);
 
       // Cleanup tensors
       dummyInput.dispose();
@@ -252,8 +260,14 @@ class ModelLoader {
     try {
       const startTime = performance.now();
 
-      // Run inference
-      const predictions = model.predict(input);
+      // For GraphModel, use execute with named inputs
+      const inputs = {
+        Placeholder: input,
+        Placeholder_1: tf.fill([1], ""), // Empty string for the string input
+      };
+
+      // Run inference using execute for GraphModel
+      const predictions = await model.execute(inputs);
 
       const endTime = performance.now();
       this.logger.debug("ModelLoader", "Model inference completed", {
@@ -331,7 +345,6 @@ class ModelLoader {
     // Add individual model info
     this.models.forEach((model, type) => {
       stats[type] = {
-        layers: model.layers.length,
         trainableParams: model.countParams(),
         config: this.getModelConfig(type),
       };
