@@ -4,7 +4,15 @@
  */
 class STFTProcessor {
     constructor(options = {}) {
-        this.logger = options.logger || new window.SpleeterJS.Logger();
+        // Handle both browser and Node.js environments
+        let Logger;
+        if (typeof window !== 'undefined' && window.SpleeterJS && window.SpleeterJS.Logger) {
+            Logger = window.SpleeterJS.Logger;
+        } else {
+            Logger = require('./Logger.js');
+        }
+        
+        this.logger = options.logger || new Logger();
         
         // Default configuration based on Spleeter's 2stems config
         this.config = {
@@ -54,9 +62,9 @@ class STFTProcessor {
     }
 
     /**
-     * Compute STFT from audio buffer
+     * Compute STFT from audio buffer - matches Python Spleeter exactly
      * @param {AudioBuffer|Object} audioData - Audio buffer or audio data object
-     * @returns {Object} STFT result with magnitude and phase
+     * @returns {Object} STFT result with complex data for each channel
      */
     computeSTFT(audioData) {
         const startTime = performance.now();
@@ -78,51 +86,80 @@ class STFTProcessor {
             throw new Error('Invalid audio data format');
         }
 
-        // Use first channel for mono processing, or average channels
-        const signal = this.prepareSignal(channels);
+        // Process each channel separately (stereo support)
+        const channelResults = [];
         
-        // Compute number of frames
-        this.nFrames = Math.ceil((signal.length - this.fftSize) / this.hopSize) + 1;
-        
-        // Initialize output arrays
-        const magnitude = new Float32Array(this.nFrames * this.nFreqBins);
-        const phase = new Float32Array(this.nFrames * this.nFreqBins);
-        
-        // Process each frame
-        for (let frame = 0; frame < this.nFrames; frame++) {
-            const startSample = frame * this.hopSize;
-            const frameSignal = new Float32Array(this.fftSize);
+        for (let ch = 0; ch < channels.length; ch++) {
+            const signal = channels[ch];
             
-            // Extract frame and apply window
+            // Add zero-padding at the beginning (matches Python: tf.zeros((frame_length, n_channels)))
+            const paddedSignal = new Float32Array(this.fftSize + signal.length);
             for (let i = 0; i < this.fftSize; i++) {
-                const sampleIndex = startSample + i;
-                if (sampleIndex < signal.length) {
-                    frameSignal[i] = signal[sampleIndex] * this.windowFunction[i];
-                } else {
-                    frameSignal[i] = 0; // Zero-padding for end of signal
+                paddedSignal[i] = 0; // Zero padding
+            }
+            for (let i = 0; i < signal.length; i++) {
+                paddedSignal[this.fftSize + i] = signal[i];
+            }
+            
+            // Compute number of frames
+            const nFrames = Math.ceil((paddedSignal.length - this.fftSize) / this.hopSize) + 1;
+            
+            // Initialize output arrays for this channel
+            const real = new Float32Array(nFrames * this.nFreqBins);
+            const imag = new Float32Array(nFrames * this.nFreqBins);
+            
+            // Process each frame
+            for (let frame = 0; frame < nFrames; frame++) {
+                const startSample = frame * this.hopSize;
+                const frameSignal = new Float32Array(this.fftSize);
+                
+                // Extract frame and apply window
+                for (let i = 0; i < this.fftSize; i++) {
+                    const sampleIndex = startSample + i;
+                    if (sampleIndex < paddedSignal.length) {
+                        frameSignal[i] = paddedSignal[sampleIndex] * this.windowFunction[i];
+                    } else {
+                        frameSignal[i] = 0; // Zero-padding for end of signal
+                    }
+                }
+                
+                // Compute FFT
+                const fftResult = this.computeFFT(frameSignal);
+                
+                // Store real and imaginary parts
+                const frameOffset = frame * this.nFreqBins;
+                for (let i = 0; i < this.nFreqBins; i++) {
+                    real[frameOffset + i] = fftResult[i * 2];
+                    imag[frameOffset + i] = fftResult[i * 2 + 1];
                 }
             }
             
-            // Compute FFT
-            const fftResult = this.computeFFT(frameSignal);
-            
-            // Store magnitude and phase
-            const frameOffset = frame * this.nFreqBins;
-            for (let i = 0; i < this.nFreqBins; i++) {
-                const real = fftResult[i * 2];
-                const imag = fftResult[i * 2 + 1];
-                
-                // Compute magnitude: sqrt(real^2 + imag^2)
-                magnitude[frameOffset + i] = Math.sqrt(real * real + imag * imag);
-                
-                // Apply spectrogram exponent
-                if (this.config.specExponent !== 1.0) {
-                    magnitude[frameOffset + i] = Math.pow(magnitude[frameOffset + i], this.config.specExponent);
+            channelResults.push({ real, imag, nFrames });
+        }
+        
+        // Use first channel's frame count as reference
+        this.nFrames = channelResults[0].nFrames;
+        
+        // Combine channels into final format (frames, freq_bins, channels)
+        const stftReal = new Float32Array(this.nFrames * this.nFreqBins * channels.length);
+        const stftImag = new Float32Array(this.nFrames * this.nFreqBins * channels.length);
+        
+        for (let frame = 0; frame < this.nFrames; frame++) {
+            for (let freq = 0; freq < this.nFreqBins; freq++) {
+                for (let ch = 0; ch < channels.length; ch++) {
+                    const srcIdx = frame * this.nFreqBins + freq;
+                    const dstIdx = (frame * this.nFreqBins + freq) * channels.length + ch;
+                    
+                    stftReal[dstIdx] = channelResults[ch].real[srcIdx];
+                    stftImag[dstIdx] = channelResults[ch].imag[srcIdx];
                 }
-                
-                // Compute phase: atan2(imag, real)
-                phase[frameOffset + i] = Math.atan2(imag, real);
             }
+        }
+        
+        // Compute magnitude spectrogram
+        const magnitude = new Float32Array(this.nFrames * this.nFreqBins * channels.length);
+        for (let i = 0; i < stftReal.length; i++) {
+            magnitude[i] = Math.sqrt(stftReal[i] * stftReal[i] + stftImag[i] * stftImag[i]);
         }
         
         const endTime = performance.now();
@@ -130,14 +167,17 @@ class STFTProcessor {
             duration: `${(endTime - startTime).toFixed(2)}ms`,
             nFrames: this.nFrames,
             nFreqBins: this.nFreqBins,
-            signalLength: signal.length
+            nChannels: channels.length,
+            signalLength: channels[0].length
         });
         
         return {
             magnitude,
-            phase,
+            real: stftReal,
+            imag: stftImag,
             nFrames: this.nFrames,
             nFreqBins: this.nFreqBins,
+            nChannels: channels.length,
             fftSize: this.fftSize,
             hopSize: this.hopSize,
             sampleRate: sampleRate
@@ -145,26 +185,48 @@ class STFTProcessor {
     }
 
     /**
-     * Prepare signal for processing (mono conversion)
+     * Prepare signals for processing (preserve stereo)
      * @param {Array<Float32Array>} channels - Audio channels
-     * @returns {Float32Array} Mono signal
+     * @returns {Array<Float32Array>} Processed signals per channel
      */
-    prepareSignal(channels) {
-        if (channels.length === 1) {
-            return channels[0];
-        }
+    prepareSignals(channels) {
+        // Return channels as-is to preserve stereo information
+        return channels;
+    }
+
+    /**
+     * Pad and partition spectrogram to fixed dimensions - matches Python's pad_and_partition
+     * @param {Float32Array} spectrogram - Input spectrogram data
+     * @param {number} T - Target time dimension (512)
+     * @param {number} F - Target frequency dimension (1024)
+     * @param {number} nChannels - Number of channels (2)
+     * @returns {Float32Array} Partitioned spectrogram with shape [T, F, channels]
+     */
+    padAndPartition(spectrogram, T, F, nChannels) {
+        // Input spectrogram shape: [frames, freq_bins, channels]
+        // Output shape: [T, F, channels]
         
-        // Average channels for stereo to mono conversion
-        const signal = new Float32Array(channels[0].length);
-        for (let i = 0; i < signal.length; i++) {
-            let sum = 0;
-            for (let channel = 0; channel < channels.length; channel++) {
-                sum += channels[channel][i];
+        const result = new Float32Array(T * F * nChannels);
+        
+        // Copy data, padding if necessary
+        for (let t = 0; t < T; t++) {
+            for (let f = 0; f < F; f++) {
+                for (let ch = 0; ch < nChannels; ch++) {
+                    const dstIdx = (t * F + f) * nChannels + ch;
+                    
+                    // Check if source index is within bounds
+                    const srcFrames = Math.floor(spectrogram.length / (F * nChannels));
+                    if (t < srcFrames && f < F) {
+                        const srcIdx = (t * F + f) * nChannels + ch;
+                        result[dstIdx] = spectrogram[srcIdx];
+                    } else {
+                        result[dstIdx] = 0; // Padding
+                    }
+                }
             }
-            signal[i] = sum / channels.length;
         }
         
-        return signal;
+        return result;
     }
 
     /**

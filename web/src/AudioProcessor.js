@@ -3,7 +3,15 @@
  */
 class AudioProcessor {
     constructor(options = {}) {
-        this.logger = options.logger || new window.SpleeterJS.Logger();
+        // Handle both browser and Node.js environments
+        let Logger;
+        if (typeof window !== 'undefined' && window.SpleeterJS && window.SpleeterJS.Logger) {
+            Logger = window.SpleeterJS.Logger;
+        } else {
+            Logger = require('./Logger.js');
+        }
+        
+        this.logger = options.logger || new Logger();
         this.audioContext = null;
         this.audioBuffer = null;
         this.sampleRate = options.sampleRate || 44100;

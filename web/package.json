@@ -16,7 +16,7 @@
   "author": "Your Name / Organization",
   "license": "MIT",
   "dependencies": {
-    "@tensorflow/tfjs": "4.22.0"
-  },
-  "devDependencies": {}
+    "@tensorflow/tfjs": "4.22.0",
+    "@tensorflow/tfjs-node": "^4.22.0"
+  }
 }

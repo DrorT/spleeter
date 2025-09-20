@@ -5,7 +5,11 @@
  */
 
 const path = require('path');
-const tf = require('@tensorflow/tfjs'); // Assuming TensorFlow.js is used
+const tf = require('@tensorflow/tfjs-node'); // Use tfjs-node for Node.js environment
+
+// Make TensorFlow.js available globally for the ModelLoader
+global.tf = tf;
+
 const ModelLoader = require('./src/ModelLoader'); // Adjust path if necessary
 
 async function testWarmup() {
@@ -16,7 +20,9 @@ async function testWarmup() {
     let modelLoader;
     try {
         modelLoader = new ModelLoader();
-        await modelLoader.loadModel('2stems');
+        // Use file:// protocol for Node.js
+        const modelPath = 'file://' + path.resolve(__dirname, 'models/2stems/model.json');
+        await modelLoader.loadModel('2stems', { path: modelPath });
         console.log('Model loaded successfully.');
     } catch (error) {
         console.error('Error loading model:', error);
@@ -26,37 +32,45 @@ async function testWarmup() {
     // 2. Warmup Process
     console.log('Step 2: Attempting model warmup...');
     try {
-        // Create proper inputs for the Spleeter model based on its signature
-        // The model expects: audio_id, mix_stft, mix_spectrogram
+        // Create proper inputs for the Spleeter model based on actual model expectations
+        // The model expects: Placeholder (raw audio waveform) with shape [-1, 2]
         
         // 1. audio_id: string tensor
         const audioId = tf.fill([1], '');
         
-        // 2. mix_stft: complex STFT tensor [1, 2049, 2]
-        const stftShape = [1, 2049, 2];
-        const stftReal = new Float32Array(2049);
-        const stftImag = new Float32Array(2049);
-        const mixStft = tf.complex(stftReal, stftImag).expandDims(0);
-        
-        // 3. mix_spectrogram: magnitude spectrogram [1, 512, 1024, 2]
-        const spectrogramShape = [1, 512, 1024, 2];
-        const spectrogramData = new Float32Array(512 * 1024 * 2);
-        const mixSpectrogram = tf.tensor4d(spectrogramData, spectrogramShape);
+        // 2. Placeholder: raw audio waveform with shape [-1, 2]
+        // This is the actual input the model expects - raw audio samples
+        const audioLength = 44100; // 1 second of audio at 44100 Hz
+        const audioData = new Float32Array(audioLength * 2); // Stereo audio
+        const waveform = tf.tensor2d(audioData, [audioLength, 2]); // Shape: [samples, channels]
         
         const inputs = {
             audio_id: audioId,
-            mix_stft: mixStft,
-            mix_spectrogram: mixSpectrogram
+            Placeholder: waveform // Use the actual input name the model expects
         };
 
         console.log('Using model inputs with shapes:', {
             audio_id: audioId.shape,
-            mix_stft: mixStft.shape,
-            mix_spectrogram: mixSpectrogram.shape
+            Placeholder: waveform.shape
         });
         
-        // Run inference using the updated predict method
-        const predictions = await modelLoader.predict(inputs);
+        // Run inference using model.executeAsync() as suggested by the error message
+        const model = modelLoader.getModel('2stems');
+        
+        // The model expects conv2d_13/SpaceToBatchND as input, which is likely the spectrogram
+        // The error suggests the model expects batch size divisible by 4 (2*2 block shape)
+        const batchSize = 4; // Use batch size divisible by 4
+        const T = 512; // Fixed time dimension
+        const F = 1024; // Fixed frequency dimension
+        const nChannels = 1; // Use mono (single channel) as expected by the model
+        const spectrogramData = new Float32Array(batchSize * T * F * nChannels);
+        const spectrogram = tf.tensor4d(spectrogramData, [batchSize, T, F, nChannels]);
+        
+        const modelInputs = {
+            'conv2d_13/SpaceToBatchND': spectrogram  // Use the exact input name the model expects
+        };
+        
+        const predictions = await model.executeAsync(modelInputs);
 
         console.log('Warmup completed successfully.');
         console.log('Warmup output shape(s):');
@@ -68,8 +82,8 @@ async function testWarmup() {
 
         // Dispose tensors to free memory
         audioId.dispose();
-        mixStft.dispose();
-        mixSpectrogram.dispose();
+        waveform.dispose();
+        spectrogram.dispose();
         if (Array.isArray(predictions)) {
             predictions.forEach(tensor => tensor.dispose());
         } else if (predictions) {
