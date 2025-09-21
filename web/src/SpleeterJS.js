@@ -6,12 +6,16 @@ class SpleeterJS {
   constructor(options = {}) {
     // Handle both browser and Node.js environments
     let Logger;
-    if (typeof window !== 'undefined' && window.SpleeterJS && window.SpleeterJS.Logger) {
+    if (
+      typeof window !== "undefined" &&
+      window.SpleeterJS &&
+      window.SpleeterJS.Logger
+    ) {
       Logger = window.SpleeterJS.Logger;
     } else {
-      Logger = require('./Logger.js');
+      Logger = require("./Logger.js");
     }
-    
+
     // Initialize logger first
     this.logger =
       options.logger ||
@@ -35,19 +39,19 @@ class SpleeterJS {
 
     // Initialize components
     let AudioProcessor, STFTProcessor, ModelLoader;
-    
-    if (typeof window !== 'undefined' && window.SpleeterJS) {
+
+    if (typeof window !== "undefined" && window.SpleeterJS) {
       // Browser environment
       AudioProcessor = window.SpleeterJS.AudioProcessor;
       STFTProcessor = window.SpleeterJS.STFTProcessor;
       ModelLoader = window.SpleeterJS.ModelLoader;
     } else {
       // Node.js environment
-      AudioProcessor = require('./AudioProcessor.js');
-      STFTProcessor = require('./STFTProcessor.js');
-      ModelLoader = require('./ModelLoader.js');
+      AudioProcessor = require("./AudioProcessor.js");
+      STFTProcessor = require("./STFTProcessor.js");
+      ModelLoader = require("./ModelLoader.js");
     }
-    
+
     this.audioProcessor = new AudioProcessor({
       logger: this.logger,
       sampleRate: this.config.sampleRate,
@@ -235,11 +239,18 @@ class SpleeterJS {
     const startTime = performance.now();
 
     try {
-      // Convert to spectrogram
+      // Compute STFT (keeps magnitude/real/imag for optional downstream use)
       const stftResult = this.stftProcessor.computeSTFT(chunk);
 
-      // Prepare input tensors for model - FIXED to match model expectations
-      const modelInputs = this.prepareModelInputs(stftResult, modelConfig);
+      // Create interleaved waveform for raw waveform input node
+      const audioData = this.audioBufferToInterleavedArray(chunk);
+
+      // Prepare input tensors for model (waveform + optional STFT + spectrogram)
+      const modelInputs = this.prepareModelInputs(
+        stftResult,
+        modelConfig,
+        audioData
+      );
 
       // Run model inference
       const predictions = await this.modelLoader.predict(modelInputs);
@@ -278,7 +289,7 @@ class SpleeterJS {
    * @param {Object} modelConfig - Model configuration
    * @returns {Object} Input tensors for model
    */
-  prepareModelInputs(stftResult, modelConfig) {
+  prepareModelInputs(stftResult, modelConfig, audioData) {
     const {
       magnitude,
       real,
@@ -319,25 +330,32 @@ class SpleeterJS {
     const F = 1024; // Fixed frequency dimension for spectrogram
     const stftFreqBins = Math.floor(fftSize / 2) + 1; // Should be 2049
 
-    // 1. Prepare mix_stft (complex STFT)
+    // 0. Waveform tensor (raw time-domain) for input node 'Placeholder'
+    let waveformTensor = null;
+    if (audioData && audioData.length) {
+      const samples = audioData.length / nChannels;
+      waveformTensor = tf.tensor2d(audioData, [samples, nChannels]);
+    }
+
+    // 1. Prepare mix_stft (complex STFT) if model requires it
     // Shape: [frames, stftFreqBins, channels] - preserve full time dimension
     // The model expects: [batch, frames, freq_bins, channels] but we'll reshape as needed
-    
+
     // Create complex STFT tensor from real and imaginary parts
     // Shape: [nFrames, stftFreqBins, nChannels]
     const stftData = new Float32Array(nFrames * stftFreqBins * nChannels * 2);
-    
+
     for (let frame = 0; frame < nFrames; frame++) {
       for (let freq = 0; freq < stftFreqBins; freq++) {
         for (let ch = 0; ch < nChannels; ch++) {
           const dstIdx = ((frame * stftFreqBins + freq) * nChannels + ch) * 2;
-          
+
           if (freq < nFreqBins) {
             const srcIdx = (frame * nFreqBins + freq) * nChannels + ch;
-            stftData[dstIdx] = real[srcIdx];     // Real part
+            stftData[dstIdx] = real[srcIdx]; // Real part
             stftData[dstIdx + 1] = imag[srcIdx]; // Imaginary part
           } else {
-            stftData[dstIdx] = 0;     // Padding for higher frequencies
+            stftData[dstIdx] = 0; // Padding for higher frequencies
             stftData[dstIdx + 1] = 0; // Padding for higher frequencies
           }
         }
@@ -346,17 +364,22 @@ class SpleeterJS {
 
     // Create complex tensor and reshape to match model expectations
     // Model expects shape [-1, 2049, 2] (no batch dimension)
-    const mixStftComplex = tf.complex(
-      tf.tensor(stftData.filter((_, i) => i % 2 === 0), [nFrames, stftFreqBins, nChannels]),
-      tf.tensor(stftData.filter((_, i) => i % 2 === 1), [nFrames, stftFreqBins, nChannels])
+    const realArray = new Float32Array(nFrames * stftFreqBins * nChannels);
+    const imagArray = new Float32Array(nFrames * stftFreqBins * nChannels);
+    let rPtr = 0,
+      iPtr = 0;
+    for (let idx = 0; idx < stftData.length; idx += 2) {
+      realArray[rPtr++] = stftData[idx];
+      imagArray[iPtr++] = stftData[idx + 1];
+    }
+    const mixStftFinal = tf.complex(
+      tf.tensor(realArray, [nFrames, stftFreqBins, nChannels]),
+      tf.tensor(imagArray, [nFrames, stftFreqBins, nChannels])
     );
-
-    // Keep shape as [frames, freq_bins, channels] - no batch dimension
-    const mixStftFinal = mixStftComplex;
 
     // 2. Prepare mix_spectrogram (magnitude spectrogram)
     // Use pad_and_partition to create fixed dimensions [T, F, channels] = [512, 1024, 2]
-    
+
     // First, reshape magnitude to [frames, freq_bins, channels] format
     const magnitudeReshaped = new Float32Array(nFrames * nFreqBins * nChannels);
     for (let i = 0; i < magnitude.length; i++) {
@@ -365,11 +388,19 @@ class SpleeterJS {
 
     // Apply pad_and_partition to get fixed dimensions
     const partitionedSpectrogram = this.stftProcessor.padAndPartition(
-      magnitudeReshaped, T, F, nChannels
+      magnitudeReshaped,
+      T,
+      F,
+      nChannels
     );
 
     // Reshape to add batch dimension: [1, T, F, channels]
-    const mixSpectrogram = tf.tensor4d(partitionedSpectrogram, [1, T, F, nChannels]);
+    const mixSpectrogram = tf.tensor4d(partitionedSpectrogram, [
+      1,
+      T,
+      F,
+      nChannels,
+    ]);
 
     // 3. Create audio_id input (empty string)
     const audioId = tf.fill([1], "");
@@ -383,11 +414,38 @@ class SpleeterJS {
       expectedSpectrogramShape: [1, T, F, nChannels],
     });
 
-    return {
-      audio_id: audioId,
-      mix_stft: mixStftFinal,
-      mix_spectrogram: mixSpectrogram,
-    };
+    // Return object with keys matching model input node names (without :0)
+    const inputs = {};
+    if (audioId) inputs["Placeholder_1"] = audioId; // audio_id
+    if (waveformTensor) inputs["Placeholder"] = waveformTensor; // raw waveform
+    inputs["transpose_1"] = mixStftFinal; // complex STFT
+    inputs["strided_slice_3"] = mixSpectrogram; // magnitude spectrogram
+    return inputs;
+  }
+
+  /**
+   * Convert an AudioBuffer into an interleaved Float32Array [LRLR...]
+   * (Reintroduced after refactor so waveform input construction works.)
+   * @param {AudioBuffer} audioBuffer
+   * @returns {Float32Array} Interleaved samples
+   */
+  audioBufferToInterleavedArray(audioBuffer) {
+    if (!audioBuffer)
+      throw new Error("audioBufferToInterleavedArray: missing audioBuffer");
+    const nChannels = audioBuffer.numberOfChannels;
+    const nSamples = audioBuffer.length;
+    const interleaved = new Float32Array(nSamples * nChannels);
+    for (let s = 0; s < nSamples; s++) {
+      for (let ch = 0; ch < nChannels; ch++) {
+        interleaved[s * nChannels + ch] = audioBuffer.getChannelData(ch)[s];
+      }
+    }
+    this.logger.debug("SpleeterJS", "AudioBuffer interleaved", {
+      nChannels,
+      nSamples,
+      length: interleaved.length,
+    });
+    return interleaved;
   }
 
   /**
@@ -397,68 +455,68 @@ class SpleeterJS {
    * @param {Object} modelConfig - Model configuration
    * @returns {Object} Separated stems
    */
-  processPredictions(predictions, stftResult, modelConfig) {
-    const { phase, nFrames, nFreqBins, fftSize, hopSize, sampleRate } =
-      stftResult;
+  processPredictions(predictions, _stftResult, modelConfig) {
     const instruments = modelConfig.instruments;
-
-    // Convert predictions to array if needed
     const predArray = Array.isArray(predictions) ? predictions : [predictions];
-
     const separatedStems = {};
 
-    // Process each instrument prediction
     for (let i = 0; i < instruments.length; i++) {
-      const instrument = instruments[i];
       const prediction = predArray[i];
-
-      // Get prediction data - this should be the separated spectrogram
-      const predData = prediction.dataSync();
-      const predShape = prediction.shape;
-
-      this.logger.debug(
-        "SpleeterJS",
-        `Processing prediction for ${instrument}`,
-        {
-          shape: predShape,
-          dataType: prediction.dtype,
-        }
-      );
-
-      // For now, we'll create a simple magnitude spectrogram from the prediction
-      // This is a simplified approach - in practice, you'd need to handle the model's specific output format
-      const instrumentMagnitude = new Float32Array(nFrames * nFreqBins);
-
-      // Copy prediction data (assuming output can be reshaped to match our STFT dimensions)
-      const predSize = Math.min(predData.length, instrumentMagnitude.length);
-      for (let j = 0; j < predSize; j++) {
-        instrumentMagnitude[j] = Math.abs(predData[j]); // Take absolute value for magnitude
+      if (!prediction) {
+        this.logger.warn(
+          "SpleeterJS",
+          `Missing prediction tensor for instrument index ${i}`
+        );
+        continue;
       }
-
-      // Reconstruct waveform using ISTFT
-      const instrumentStftData = {
-        magnitude: instrumentMagnitude,
-        phase: phase, // Use original phase for reconstruction
-        nFrames,
-        nFreqBins,
-        fftSize,
-        hopSize,
-        sampleRate,
-      };
-
-      const waveform = this.stftProcessor.computeISTFT(instrumentStftData);
-
-      // Convert to AudioBuffer
-      const audioBuffer = this.audioProcessor.float32ArrayToAudioBuffer({
-        channels: [waveform],
-        sampleRate,
-        length: waveform.length,
-        duration: waveform.length / sampleRate,
+      const shape = prediction.shape;
+      const data = prediction.dataSync();
+      this.logger.debug("SpleeterJS", "Processing prediction", {
+        instrument: instruments[i],
+        shape,
       });
 
-      separatedStems[instrument] = audioBuffer;
-    }
+      let channels = [];
+      let sampleRate = this.config.sampleRate;
 
+      if (shape.length === 2 && shape[1] === 2) {
+        // [samples, 2] stereo waveform
+        const nSamples = shape[0];
+        const left = new Float32Array(nSamples);
+        const right = new Float32Array(nSamples);
+        for (let s = 0; s < nSamples; s++) {
+          left[s] = data[s * 2];
+          right[s] = data[s * 2 + 1];
+        }
+        channels = [left, right];
+      } else if (shape.length === 1) {
+        // Mono waveform [samples]
+        channels = [Float32Array.from(data)];
+      } else {
+        // Fallback: treat first dim as samples and last dim as channels if small (<=8)
+        const nSamples = shape[0];
+        const nChannels = shape[shape.length - 1];
+        if (nChannels <= 8 && data.length === nSamples * nChannels) {
+          for (let ch = 0; ch < nChannels; ch++) {
+            const chan = new Float32Array(nSamples);
+            for (let s = 0; s < nSamples; s++)
+              chan[s] = data[s * nChannels + ch];
+            channels.push(chan);
+          }
+        } else {
+          // Last resort: flatten to mono
+          channels = [Float32Array.from(data)];
+        }
+      }
+
+      const audioBuffer = this.audioProcessor.float32ArrayToAudioBuffer({
+        channels,
+        sampleRate,
+        length: channels[0].length,
+        duration: channels[0].length / sampleRate,
+      });
+      separatedStems[instruments[i]] = audioBuffer;
+    }
     return separatedStems;
   }
 
@@ -469,41 +527,34 @@ class SpleeterJS {
    * @returns {Object} Combined stems
    */
   combineChunks(separatedChunks, instruments) {
-    const combinedStems = {};
-
-    // Initialize combined stems
+    if (!separatedChunks.length) return {};
+    const finalStems = {};
     for (const instrument of instruments) {
+      const firstBuffer = separatedChunks[0][instrument];
+      const nChannels = firstBuffer.numberOfChannels;
       const totalLength = separatedChunks.reduce(
         (sum, chunk) => sum + chunk[instrument].length,
         0
       );
-
-      combinedStems[instrument] = {
-        channels: [new Float32Array(totalLength)],
-        sampleRate: separatedChunks[0][instrument].sampleRate,
-        length: totalLength,
-        duration: totalLength / separatedChunks[0][instrument].sampleRate,
-      };
-    }
-
-    // Combine chunks
-    let offset = 0;
-    for (const chunk of separatedChunks) {
-      for (const instrument of instruments) {
-        const chunkData = chunk[instrument].getChannelData(0);
-        combinedStems[instrument].channels[0].set(chunkData, offset);
-      }
-      offset += separatedChunks[0][instruments[0]].length;
-    }
-
-    // Convert to AudioBuffers
-    const finalStems = {};
-    for (const instrument of instruments) {
-      finalStems[instrument] = this.audioProcessor.float32ArrayToAudioBuffer(
-        combinedStems[instrument]
+      const channels = Array.from(
+        { length: nChannels },
+        () => new Float32Array(totalLength)
       );
+      let offset = 0;
+      for (const chunk of separatedChunks) {
+        const buf = chunk[instrument];
+        for (let ch = 0; ch < nChannels; ch++) {
+          channels[ch].set(buf.getChannelData(ch), offset);
+        }
+        offset += buf.length;
+      }
+      finalStems[instrument] = this.audioProcessor.float32ArrayToAudioBuffer({
+        channels,
+        sampleRate: firstBuffer.sampleRate,
+        length: totalLength,
+        duration: totalLength / firstBuffer.sampleRate,
+      });
     }
-
     return finalStems;
   }
 

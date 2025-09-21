@@ -5,13 +5,20 @@ class ModelLoader {
   constructor(options = {}) {
     // Handle both browser and Node.js environments
     let Logger;
-    if (typeof window !== 'undefined' && window.SpleeterJS && window.SpleeterJS.Logger) {
+    if (
+      typeof window !== "undefined" &&
+      window.SpleeterJS &&
+      window.SpleeterJS.Logger
+    ) {
       Logger = window.SpleeterJS.Logger;
     } else {
-      Logger = require('./Logger.js');
+      Logger = require("./Logger.js");
     }
-    
+
     this.logger = options.logger || new Logger();
+    // Async execution control
+    this.forceAsync = !!options.forceAsync; // user-forced async
+    this._requiresAsync = this.forceAsync; // detected dynamic graph requiring async
     this.models = new Map();
     this.modelConfigs = this.initializeModelConfigs();
     this.currentModel = null;
@@ -138,157 +145,65 @@ class ModelLoader {
    */
   async warmupModel(model, config) {
     try {
-      // Create dummy inputs that match the exact format the model expects
-      // Based on Python Spleeter: mix_stft and mix_spectrogram with proper shapes
-      
-      // 1. Create mix_stft (complex STFT)
-      // Shape should be: [batch, frames, freq_bins, channels] = [1, frames, 2049, 2]
-      // For warmup, we'll use a reasonable number of frames
-      const nFrames = 10; // Small number for warmup
-      const stftFreqBins = 2049; // frame_length // 2 + 1 = 4096 // 2 + 1
-      const nChannels = 2;
-      
-      // Create real and imaginary parts
-      const stftReal = tf.zeros([nFrames, stftFreqBins, nChannels]);
-      const stftImag = tf.zeros([nFrames, stftFreqBins, nChannels]);
-      
-      // Create complex tensor - no batch dimension as expected by model
-      const mixStft = tf.complex(stftReal, stftImag); // Shape: [frames, freq_bins, channels]
-
-      // 2. Create mix_spectrogram (magnitude spectrogram)
-      // Shape should be: [batch, time, freq, channels] = [1, 512, 1024, 2]
-      const T = 512; // Fixed time dimension
-      const F = 1024; // Fixed frequency dimension
-      const mixSpectrogram = tf.zeros([1, T, F, nChannels]);
-
-      // 3. Create audio_id input
-      const audioId = tf.fill([1], "");
-
-      const inputs = {
-        audio_id: audioId,
-        mix_stft: mixStft,
-        mix_spectrogram: mixSpectrogram,
-      };
-
-      this.logger.debug("ModelLoader", "Warming up model with inputs", {
-        audio_id: audioId.shape,
-        mix_stft: mixStft.shape,
-        mix_spectrogram: mixSpectrogram.shape,
+      const modelInputs = model.inputs.map((i) => i.name);
+      // Create minimal tensors matching each input type
+      const execInputs = {};
+      const disposables = [];
+      model.inputs.forEach((inp) => {
+        if (inp.dtype === "string") {
+          const t = tf.fill([1], "");
+          execInputs[inp.name] = t;
+          disposables.push(t);
+        } else if (inp.dtype === "complex64") {
+          // Assume shape [-1,2049,2]; use 4 frames for warmup
+          const real = tf.zeros([4, 2049, 2]);
+          const imag = tf.zeros([4, 2049, 2]);
+          const c = tf.complex(real, imag);
+          real.dispose();
+          imag.dispose();
+          execInputs[inp.name] = c;
+          disposables.push(c);
+        } else if (inp.shape.length === 4) {
+          // spectrogram-like
+          const shape = [1, 512, 1024, 2];
+          const t = tf.zeros(shape);
+          execInputs[inp.name] = t;
+          disposables.push(t);
+        } else if (inp.shape.length === 2) {
+          // waveform [samples,channels]
+          const t = tf.zeros([4096, 2]);
+          execInputs[inp.name] = t;
+          disposables.push(t);
+        } else {
+          const t = tf.zeros([1]);
+          execInputs[inp.name] = t;
+          disposables.push(t);
+        }
       });
-
-      // Check model signature and use appropriate execution method for warmup too
-      const modelInputs = model.inputs;
-      this.logger.debug("ModelLoader", "Model input signature for warmup", {
-        inputNames: modelInputs.map(input => input.name),
-        inputShapes: modelInputs.map(input => input.shape)
-      });
-
-      // Try to map our named inputs to the model's expected input names
-      const executionInputs = {};
-      if (modelInputs.length === 1) {
-        // Single input model - use the first input
-        executionInputs[modelInputs[0].name] = mixSpectrogram; // Use spectrogram as primary input
+      let out;
+      if (this.forceAsync || this._requiresAsync) {
+        out = await model.executeAsync(execInputs);
       } else {
-        // Multiple inputs - try to map them based on dtype and name patterns
-        modelInputs.forEach((input, index) => {
-          const inputName = input.name;
-          const inputDtype = input.dtype;
-          
-          this.logger.debug("ModelLoader", `Processing warmup model input`, {
-            name: inputName,
-            dtype: inputDtype,
-            shape: input.shape
-          });
-          
-          // Map based on dtype first, then name patterns
-          if (inputDtype === 'string') {
-            // String input - must be audio_id
-            if (audioId) {
-              executionInputs[inputName] = audioId;
-              this.logger.debug("ModelLoader", `Mapped warmup string input`, {
-                inputName,
-                source: 'audio_id',
-                dtype: audioId.dtype
-              });
-            } else {
-              throw new Error(`Model expects string input '${inputName}' but no audio_id provided`);
-            }
-          } else if (inputDtype === 'float32' || inputDtype === 'float64') {
-            // Float input - likely spectrogram or audio data
-            if (inputName.includes('spectrogram') || inputName.includes('conv2d') || inputName.includes('Placeholder')) {
-              executionInputs[inputName] = mixSpectrogram;
-              this.logger.debug("ModelLoader", `Mapped warmup float input to spectrogram`, {
-                inputName,
-                source: 'mix_spectrogram',
-                dtype: mixSpectrogram.dtype
-              });
-            } else {
-              // Default to spectrogram for float inputs
-              executionInputs[inputName] = mixSpectrogram;
-              this.logger.debug("ModelLoader", `Mapped warmup float input to spectrogram (default)`, {
-                inputName,
-                source: 'mix_spectrogram',
-                dtype: mixSpectrogram.dtype
-              });
-            }
-          } else if (inputDtype === 'complex64' || inputDtype === 'complex128') {
-            // Complex input - must be STFT
-            if (mixStft) {
-              executionInputs[inputName] = mixStft;
-              this.logger.debug("ModelLoader", `Mapped warmup complex input to STFT`, {
-                inputName,
-                source: 'mix_stft',
-                dtype: mixStft.dtype
-              });
-            } else {
-              throw new Error(`Model expects complex input '${inputName}' but no mix_stft provided`);
-            }
+        try {
+          out = await model.execute(execInputs);
+        } catch (e) {
+          if (/dynamic op|Merge/.test(e.message)) {
+            this._requiresAsync = true;
+            this.logger.warn(
+              "ModelLoader",
+              "Warmup detected dynamic graph; switching to executeAsync"
+            );
+            out = await model.executeAsync(execInputs);
           } else {
-            // Unknown dtype - try name-based mapping as fallback
-            this.logger.warn("ModelLoader", `Unknown warmup input dtype: ${inputDtype}, using name-based mapping`, {
-              inputName,
-              dtype: inputDtype
-            });
-            
-            if (audioId && inputName.includes('audio_id')) {
-              executionInputs[inputName] = audioId;
-            } else if (mixStft && inputName.includes('stft')) {
-              executionInputs[inputName] = mixStft;
-            } else if (mixSpectrogram && (inputName.includes('spectrogram') || inputName.includes('conv2d'))) {
-              executionInputs[inputName] = mixSpectrogram;
-            } else {
-              // Default to spectrogram
-              executionInputs[inputName] = mixSpectrogram;
-            }
+            throw e;
           }
-        });
+        }
       }
-
-      this.logger.debug("ModelLoader", "Mapped warmup execution inputs", {
-        mappedInputs: Object.keys(executionInputs)
-      });
-
-      // Use execute() instead of executeAsync() to avoid dynamic ops issues
-      const predictions = await model.execute(executionInputs);
-
-      this.logger.debug("ModelLoader", "Model warmup completed", {
-        outputShape: Array.isArray(predictions)
-          ? predictions.map((p) => p.shape)
-          : predictions.shape,
-      });
-
-      // Cleanup tensors
-      audioId.dispose();
-      mixStft.dispose();
-      mixSpectrogram.dispose();
-      if (Array.isArray(predictions)) {
-        predictions.forEach((pred) => pred.dispose());
-      } else {
-        predictions.dispose();
-      }
-    } catch (error) {
-      this.logger.error("ModelLoader", "Model warmup failed", error);
-      // Don't throw here - warmup failure shouldn't prevent model usage
+      if (Array.isArray(out)) out.forEach((o) => o.dispose());
+      else out.dispose();
+      disposables.forEach((d) => d.dispose());
+    } catch (e) {
+      this.logger.warn("ModelLoader", "Warmup skipped", { error: e.message });
     }
   }
 
@@ -395,17 +310,11 @@ class ModelLoader {
       const startTime = performance.now();
 
       // Validate inputs
-      if (!inputs || typeof inputs !== 'object') {
-        throw new Error('Inputs must be an object with named input tensors');
+      if (!inputs || typeof inputs !== "object") {
+        throw new Error("Inputs must be an object with named input tensors");
       }
 
-      // Check for required inputs based on model signature
-      const requiredInputs = ['audio_id', 'mix_stft', 'mix_spectrogram'];
-      for (const inputName of requiredInputs) {
-        if (!inputs[inputName]) {
-          throw new Error(`Missing required input: ${inputName}`);
-        }
-      }
+      // No fixed required input list now; will map provided names to signature.
 
       this.logger.debug("ModelLoader", "Running model inference", {
         modelType: type,
@@ -413,104 +322,71 @@ class ModelLoader {
         inputShapes: Object.entries(inputs).reduce((acc, [name, tensor]) => {
           acc[name] = tensor.shape;
           return acc;
-        }, {})
+        }, {}),
       });
 
       // Check model signature and use appropriate execution method
       const modelInputs = model.inputs;
       this.logger.debug("ModelLoader", "Model input signature", {
-        inputNames: modelInputs.map(input => input.name),
-        inputShapes: modelInputs.map(input => input.shape)
+        inputNames: modelInputs.map((input) => input.name),
+        inputShapes: modelInputs.map((input) => input.shape),
       });
 
-      // Try to map our named inputs to the model's expected input names
       const executionInputs = {};
-      if (modelInputs.length === 1) {
-        // Single input model - use the first input
-        executionInputs[modelInputs[0].name] = inputs.mix_spectrogram; // Use spectrogram as primary input
-      } else {
-        // Multiple inputs - try to map them based on dtype and name patterns
-        modelInputs.forEach((input, index) => {
-          const inputName = input.name;
-          const inputDtype = input.dtype;
-          
-          this.logger.debug("ModelLoader", `Processing model input`, {
-            name: inputName,
-            dtype: inputDtype,
-            shape: input.shape
-          });
-          
-          // Map based on dtype first, then name patterns
-          if (inputDtype === 'string') {
-            // String input - must be audio_id
-            if (inputs.audio_id) {
-              executionInputs[inputName] = inputs.audio_id;
-              this.logger.debug("ModelLoader", `Mapped string input`, {
-                inputName,
-                source: 'audio_id',
-                dtype: inputs.audio_id.dtype
-              });
-            } else {
-              throw new Error(`Model expects string input '${inputName}' but no audio_id provided`);
-            }
-          } else if (inputDtype === 'float32' || inputDtype === 'float64') {
-            // Float input - likely spectrogram or audio data
-            if (inputName.includes('spectrogram') || inputName.includes('conv2d') || inputName.includes('Placeholder')) {
-              executionInputs[inputName] = inputs.mix_spectrogram;
-              this.logger.debug("ModelLoader", `Mapped float input to spectrogram`, {
-                inputName,
-                source: 'mix_spectrogram',
-                dtype: inputs.mix_spectrogram.dtype
-              });
-            } else {
-              // Default to spectrogram for float inputs
-              executionInputs[inputName] = inputs.mix_spectrogram;
-              this.logger.debug("ModelLoader", `Mapped float input to spectrogram (default)`, {
-                inputName,
-                source: 'mix_spectrogram',
-                dtype: inputs.mix_spectrogram.dtype
-              });
-            }
-          } else if (inputDtype === 'complex64' || inputDtype === 'complex128') {
-            // Complex input - must be STFT
-            if (inputs.mix_stft) {
-              executionInputs[inputName] = inputs.mix_stft;
-              this.logger.debug("ModelLoader", `Mapped complex input to STFT`, {
-                inputName,
-                source: 'mix_stft',
-                dtype: inputs.mix_stft.dtype
-              });
-            } else {
-              throw new Error(`Model expects complex input '${inputName}' but no mix_stft provided`);
-            }
-          } else {
-            // Unknown dtype - try name-based mapping as fallback
-            this.logger.warn("ModelLoader", `Unknown input dtype: ${inputDtype}, using name-based mapping`, {
-              inputName,
-              dtype: inputDtype
-            });
-            
-            if (inputs.audio_id && inputName.includes('audio_id')) {
-              executionInputs[inputName] = inputs.audio_id;
-            } else if (inputs.mix_stft && inputName.includes('stft')) {
-              executionInputs[inputName] = inputs.mix_stft;
-            } else if (inputs.mix_spectrogram && (inputName.includes('spectrogram') || inputName.includes('conv2d'))) {
-              executionInputs[inputName] = inputs.mix_spectrogram;
-            } else {
-              // Default to spectrogram
-              executionInputs[inputName] = inputs.mix_spectrogram;
-            }
-          }
-        });
-      }
+      model.inputs.forEach((inp) => {
+        if (inputs[inp.name]) {
+          executionInputs[inp.name] = inputs[inp.name];
+        } else {
+          // Try legacy alias mapping
+          if (inp.name === "Placeholder" && inputs.Placeholder)
+            executionInputs[inp.name] = inputs.Placeholder;
+          else if (
+            inp.name === "transpose_1" &&
+            (inputs.transpose_1 || inputs.mix_stft)
+          )
+            executionInputs[inp.name] = inputs.transpose_1 || inputs.mix_stft;
+          else if (
+            inp.name === "strided_slice_3" &&
+            (inputs.strided_slice_3 || inputs.mix_spectrogram)
+          )
+            executionInputs[inp.name] =
+              inputs.strided_slice_3 || inputs.mix_spectrogram;
+          else if (inp.dtype === "string" && inputs.Placeholder_1)
+            executionInputs[inp.name] = inputs.Placeholder_1;
+        }
+      });
 
       this.logger.debug("ModelLoader", "Mapped execution inputs", {
         mappedInputs: Object.keys(executionInputs),
-        originalInputs: Object.keys(inputs)
+        originalInputs: Object.keys(inputs),
       });
 
-      // Use execute() instead of executeAsync() to avoid dynamic ops issues
-      const predictions = await model.execute(executionInputs);
+      const config = this.getModelConfig(type);
+      const outputNames =
+        config && config.outputNames ? config.outputNames : undefined;
+      let predictions;
+      if (this.forceAsync || this._requiresAsync) {
+        predictions = await model.executeAsync(executionInputs, outputNames);
+      } else {
+        try {
+          predictions = await model.execute(executionInputs, outputNames);
+        } catch (e) {
+          if (/dynamic op|Merge/.test(e.message)) {
+            this._requiresAsync = true;
+            this.logger.warn(
+              "ModelLoader",
+              "Detected dynamic ops; switching permanently to executeAsync",
+              { error: e.message }
+            );
+            predictions = await model.executeAsync(
+              executionInputs,
+              outputNames
+            );
+          } else {
+            throw e;
+          }
+        }
+      }
 
       const endTime = performance.now();
       this.logger.debug("ModelLoader", "Model inference completed", {
@@ -519,6 +395,7 @@ class ModelLoader {
         outputShape: Array.isArray(predictions)
           ? predictions.map((p) => p.shape)
           : predictions.shape,
+        asyncMode: this.forceAsync || this._requiresAsync,
       });
 
       return predictions;
